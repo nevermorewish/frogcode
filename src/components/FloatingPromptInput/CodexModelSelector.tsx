@@ -23,15 +23,22 @@ export interface CodexModelConfig {
  * Default Codex models used as fallback when no cached data is available.
  * Intentionally kept as the known baseline; dynamically discovered models
  * from stream init messages will merge/override these.
- * Updated: February 2026
+ * Updated: March 2026
  */
 const DEFAULT_CODEX_MODELS: CodexModelConfig[] = [
   {
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    description: '最强旗舰模型，1M 上下文，原生计算机使用（2026年3月）',
+    icon: <Star className="h-4 w-4 text-purple-500" />,
+    isDefault: true,
+  },
+  {
     id: 'gpt-5.3-codex',
     name: 'GPT-5.3 Codex',
-    description: '最新代码模型，比 5.2 快 25%（2026年2月发布）',
+    description: '专用代码模型，比 5.2 快 25%（2026年2月）',
     icon: <Rocket className="h-4 w-4 text-emerald-500" />,
-    isDefault: true,
+    isDefault: false,
   },
   {
     id: 'gpt-5.3-codex-spark',
@@ -50,7 +57,7 @@ const DEFAULT_CODEX_MODELS: CodexModelConfig[] = [
   {
     id: 'gpt-5.2',
     name: 'GPT 5.2',
-    description: 'Latest flagship model',
+    description: '上一代旗舰模型',
     icon: <Star className="h-4 w-4 text-yellow-500" />,
     isDefault: false,
   },
@@ -83,6 +90,12 @@ const DEFAULT_CODEX_MODELS: CodexModelConfig[] = [
  */
 function getCodexModelIcon(modelId: string): React.ReactNode {
   const lower = modelId.toLowerCase();
+  if (lower.includes('5.4-pro')) {
+    return <Star className="h-4 w-4 text-red-500" />;
+  }
+  if (lower.includes('5.4')) {
+    return <Star className="h-4 w-4 text-purple-500" />;
+  }
   if (lower.includes('codex') && lower.includes('max')) {
     return <Rocket className="h-4 w-4 text-green-500" />;
   }

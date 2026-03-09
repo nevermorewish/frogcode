@@ -96,6 +96,25 @@ struct ModelPricing {
 fn get_codex_pricing(model: &str) -> ModelPricing {
     let normalized = model.to_lowercase();
 
+    // GPT-5.4 Pro (premium tier)
+    if normalized.contains("5.4-pro") || normalized.contains("5_4_pro") {
+        return ModelPricing {
+            input: 30.00,
+            output: 180.00,
+            cache_read: 3.00,
+        };
+    }
+
+    // GPT-5.4 (latest flagship - March 2026)
+    if normalized.contains("gpt-5.4") || normalized.contains("gpt5.4")
+        || normalized.contains("gpt_5_4") || normalized.contains("5.4") {
+        return ModelPricing {
+            input: 2.50,
+            output: 15.00,
+            cache_read: 0.25,
+        };
+    }
+
     // GPT-5.3 Codex Spark (lightweight fast version)
     if normalized.contains("5.3-codex-spark") || normalized.contains("5_3_codex_spark") {
         return ModelPricing {
@@ -183,11 +202,11 @@ fn get_codex_pricing(model: &str) -> ModelPricing {
         };
     }
 
-    // Default to codex-mini-latest pricing
+    // Default to gpt-5.4 pricing
     ModelPricing {
-        input: 1.50,
-        output: 6.00,
-        cache_read: 0.375,
+        input: 2.50,
+        output: 15.00,
+        cache_read: 0.25,
     }
 }
 

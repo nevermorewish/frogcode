@@ -5,7 +5,7 @@
  * Claude 定价：https://platform.claude.com/docs/en/about-claude/pricing
  * Codex 定价：https://platform.openai.com/docs/pricing (codex-mini-latest)
  * 价格单位：美元/百万 tokens
- * Last Updated: February 2026
+ * Last Updated: March 2026
  */
 
 export interface ModelPricing {
@@ -36,6 +36,13 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     output: 25.0,
     cacheWrite: 6.25,
     cacheRead: 0.50
+  },
+  // Claude Opus 4.6 Fast Mode (2.5x faster, higher cost)
+  'claude-opus-4.6-fast': {
+    input: 30.0,       // $30 / 1M input tokens (<200K context)
+    output: 150.0,     // $150 / 1M output tokens
+    cacheWrite: 37.5,
+    cacheRead: 3.0
   },
   'claude-sonnet-4.6': {
     input: 3.0,
@@ -80,11 +87,27 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 
   // ============================================================================
   // Codex Models (OpenAI)
-  // Source: https://platform.openai.com/docs/pricing (2026-02 官方定价)
+  // Source: https://platform.openai.com/docs/pricing (2026-03 官方定价)
   // Note: Codex 使用 ChatGPT 订阅时按会话限制计费，API Key 用户按 token 计费
   // ============================================================================
 
-  // GPT-5.3-Codex 系列 - 最新代码模型（2026年2月5日发布）
+  // GPT-5.4 - 最强旗舰模型（2026年3月5日发布）
+  // Context: 1.05M tokens, Max Output: 128K tokens, 原生计算机使用
+  'gpt-5.4': {
+    input: 2.50,      // $2.50 / 1M input tokens (<=272K)
+    output: 15.00,    // $15.00 / 1M output tokens
+    cacheWrite: 0,    // OpenAI cache write 免费
+    cacheRead: 0.25   // $0.25 cached input (via OpenRouter: $0.625)
+  },
+  // GPT-5.4 Pro - 高计算版本
+  'gpt-5.4-pro': {
+    input: 30.00,     // $30.00 / 1M input tokens
+    output: 180.00,   // $180.00 / 1M output tokens
+    cacheWrite: 0,
+    cacheRead: 3.00
+  },
+
+  // GPT-5.3-Codex 系列 - 专用代码模型（2026年2月5日发布）
   // Context: 400K tokens, Max Output: 128K tokens, 25% faster than GPT-5.2-Codex
   'gpt-5.3-codex': {
     input: 2.00,      // $2.00 / 1M input tokens
@@ -296,7 +319,15 @@ export function getPricingForModel(model?: string, engine?: string): ModelPricin
   // Codex Models (OpenAI)
   // ============================================================================
 
-  // GPT-5.3-Codex 系列（最新）
+  // GPT-5.4 系列（最新旗舰）
+  if (normalized.includes('5.4-pro') || normalized.includes('5_4_pro')) {
+    return MODEL_PRICING['gpt-5.4-pro'];
+  }
+  if (normalized.includes('gpt-5.4') || normalized.includes('gpt5.4') || normalized.includes('gpt_5_4')) {
+    return MODEL_PRICING['gpt-5.4'];
+  }
+
+  // GPT-5.3-Codex 系列
   if (normalized.includes('5.3-codex-spark') || normalized.includes('5_3_codex_spark')) {
     return MODEL_PRICING['gpt-5.3-codex-spark'];
   }
@@ -341,9 +372,9 @@ export function getPricingForModel(model?: string, engine?: string): ModelPricin
     return MODEL_PRICING['gpt-5-codex'];
   }
 
-  // 通用 Codex 匹配 - 默认使用 gpt-5.3-codex
+  // 通用 Codex 匹配 - 默认使用 gpt-5.4
   if (normalized.includes('codex')) {
-    return MODEL_PRICING['gpt-5.3-codex'];
+    return MODEL_PRICING['gpt-5.4'];
   }
 
   // ============================================================================
@@ -352,6 +383,9 @@ export function getPricingForModel(model?: string, engine?: string): ModelPricin
 
   // Claude 4.6 Series (Latest)
   if (normalized.includes('opus') && (normalized.includes('4.6') || normalized.includes('4-6'))) {
+    if (normalized.includes('fast')) {
+      return MODEL_PRICING['claude-opus-4.6-fast'];
+    }
     return MODEL_PRICING['claude-opus-4.6'];
   }
   if (normalized.includes('sonnet') && (normalized.includes('4.6') || normalized.includes('4-6'))) {
@@ -385,9 +419,9 @@ export function getPricingForModel(model?: string, engine?: string): ModelPricin
     return MODEL_PRICING['claude-sonnet-4.6']; // Default to latest
   }
 
-  // Codex 引擎使用 GPT-5.3-Codex 默认定价
+  // Codex 引擎使用 GPT-5.4 默认定价
   if (engine === 'codex') {
-    return MODEL_PRICING['gpt-5.3-codex'];
+    return MODEL_PRICING['gpt-5.4'];
   }
 
   // Gemini 引擎使用 Gemini 默认定价

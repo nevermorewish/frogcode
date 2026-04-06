@@ -671,6 +671,17 @@ export interface ImportServerResult {
   error?: string;
 }
 
+// ==================== Frogclaw Auth Types ====================
+
+export interface FrogclawUserData {
+  id: number;
+  username: string;
+  display_name: string;
+  role: number;
+  status: number;
+  group: string;
+}
+
 /**
  * API client for interacting with the Rust backend
  */
@@ -4230,6 +4241,12 @@ export const api = {
       console.error("Failed to delete Gemini session:", error);
       throw error;
     }
+  },
+
+  // ==================== Frogclaw Authentication ====================
+
+  async loginToFrogclaw(username: string, password: string): Promise<FrogclawUserData> {
+    return await invoke<FrogclawUserData>("login_to_frogclaw", { username, password });
   },
 
 };

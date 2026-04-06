@@ -16,6 +16,7 @@ use claude_binary::init_shell_environment;
 
 use std::sync::{Arc, Mutex};
 
+use commands::auth::login_to_frogclaw;
 use commands::acemcp::{
     enhance_prompt_with_context, export_acemcp_sidecar, get_extracted_sidecar_path,
     load_acemcp_config, preindex_project, save_acemcp_config, test_acemcp_availability,
@@ -549,6 +550,8 @@ fn main() {
             set_gemini_wsl_mode_config,
             // Gemini Usage Statistics
             get_gemini_usage_stats,
+            // Frogclaw Authentication
+            login_to_frogclaw,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

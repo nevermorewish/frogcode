@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code GUI/Bridge 项目功能完整对比</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+    --cyan: #39d2c0;
+    --yellow: #e3b341;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0;
+  }
+  .header {
+    background: linear-gradient(135deg, #1a1e2e 0%, #0d1117 50%, #131825 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 48px 0 40px;
+    text-align: center;
+  }
+  .header h1 {
+    font-size: 2.2em;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 12px;
+  }
+  .header p { color: var(--text2); font-size: 1.05em; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 32px 24px; }
+
+  /* Navigation */
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(13,17,23,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+  }
+  .nav-inner {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 8px 0;
+  }
+  .nav a {
+    color: var(--text2);
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .nav a:hover { background: var(--bg2); color: var(--text); }
+
+  /* Sections */
+  section { margin-bottom: 48px; }
+  h2 {
+    font-size: 1.5em;
+    font-weight: 600;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  h2 .num {
+    color: var(--accent);
+    font-weight: 700;
+    margin-right: 8px;
+  }
+  h3 {
+    font-size: 1.15em;
+    font-weight: 600;
+    margin: 28px 0 14px;
+    color: var(--text);
+  }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88em;
+  }
+  thead { background: var(--bg2); }
+  th {
+    padding: 12px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    position: sticky;
+    left: 0;
+  }
+  th:first-child { min-width: 140px; }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    color: var(--text2);
+  }
+  tr:hover td { background: rgba(88,166,255,0.04); }
+  td:first-child { color: var(--text); font-weight: 500; }
+
+  /* Cell badges */
+  .y {
+    display: inline-block;
+    background: rgba(63,185,80,0.15);
+    color: var(--green);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-weight: 600;
+  }
+  .n {
+    display: inline-block;
+    color: #484f58;
+    font-size: 0.85em;
+  }
+  .partial {
+    display: inline-block;
+    background: rgba(210,153,34,0.15);
+    color: var(--orange);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85em;
+  }
+
+  /* Project cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card-title {
+    font-size: 1.1em;
+    font-weight: 700;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card ul {
+    list-style: none;
+    padding: 0;
+  }
+  .card li {
+    padding: 4px 0;
+    color: var(--text2);
+    font-size: 0.9em;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .card li::before {
+    content: ">";
+    color: var(--accent);
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .card li strong { color: var(--text); }
+
+  /* Tags */
+  .tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.78em;
+    font-weight: 600;
+  }
+  .tag-rust { background: rgba(222,110,52,0.2); color: #de6e34; }
+  .tag-ts { background: rgba(49,120,198,0.2); color: #3178c6; }
+  .tag-go { background: rgba(0,173,216,0.2); color: #00add8; }
+  .tag-tauri { background: rgba(253,202,0,0.2); color: #fcc200; }
+  .tag-electron { background: rgba(71,134,204,0.2); color: #47b8e0; }
+
+  /* Architecture diagram */
+  .arch-bar {
+    display: flex;
+    align-items: center;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin: 20px 0;
+    gap: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .arch-bar::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 24px;
+    right: 24px;
+    height: 2px;
+    background: linear-gradient(90deg, var(--green), var(--orange), var(--red));
+    transform: translateY(-50%);
+    z-index: 0;
+  }
+  .arch-item {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    flex: 1;
+  }
+  .arch-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    margin: 0 auto 8px;
+    border: 2px solid var(--bg);
+  }
+  .arch-label {
+    font-size: 0.82em;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .arch-sub {
+    font-size: 0.72em;
+    color: var(--text2);
+    margin-top: 2px;
+  }
+
+  /* Recommend table */
+  .rec-table td:first-child {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* Session method */
+  .method-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .method-item {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .method-item .label {
+    font-size: 0.82em;
+    color: var(--text2);
+    margin-bottom: 6px;
+  }
+  .method-item .value {
+    font-size: 0.9em;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .method-item .projects {
+    margin-top: 6px;
+    font-size: 0.8em;
+    color: var(--accent);
+  }
+
+  code {
+    background: var(--bg3);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: var(--cyan);
+  }
+
+  /* GitHub links */
+  a.gh {
+    color: var(--accent);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  a.gh:hover { color: #79c0ff; text-decoration: underline; }
+  a.gh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    text-decoration: none;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.82em;
+    transition: all 0.2s;
+  }
+  a.gh-btn:hover { border-color: var(--accent); color: var(--accent); }
+  a.gh-btn svg { width: 16px; height: 16px; fill: currentColor; }
+
+  .footer {
+    text-align: center;
+    padding: 40px 0;
+    color: var(--text2);
+    font-size: 0.85em;
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Claude Code GUI/Bridge 项目功能完整对比</h1>
+  <p>对比 7 个基于 Claude Code 的开源项目 &mdash; 架构、功能、平台支持全维度分析</p>
+  <p style="margin-top:8px;font-size:0.88em;color:#484f58;">更新日期：2026-04-06</p>
+</div>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="#overview">项目概览</a>
+    <a href="#connection">连接方式</a>
+    <a href="#agents">AI Agent</a>
+    <a href="#platforms">平台环境</a>
+    <a href="#session">会话管理</a>
+    <a href="#automation">自动化</a>
+    <a href="#mcp">MCP</a>
+    <a href="#voice">语音</a>
+    <a href="#settings">设置配置</a>
+    <a href="#unique">独特功能</a>
+    <a href="#techstack">技术栈</a>
+    <a href="#recommend">选型建议</a>
+  </div>
+</nav>
+
+<div class="container">
+
+<!-- 一、项目概览 -->
+<section id="overview">
+<h2><span class="num">一</span>项目概览</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>项目</th><th>定位</th><th>语言/框架</th><th>开源协议</th><th>版本</th><th>GitHub</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>opcode</strong></td><td>Claude Code 桌面 GUI + Web</td><td><span class="tag tag-rust">Rust</span> <span class="tag tag-tauri">Tauri 2</span> + React 18</td><td>AGPL-3.0</td><td>0.2.1</td><td><a class="gh-btn" href="https://github.com/winfunc/opcode" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+    <tr><td><strong>Any-code</strong></td><td>多 AI Agent 桌面 GUI</td><td><span class="tag tag-rust">Rust</span> <span class="tag tag-tauri">Tauri 2</span> + React 18</td><td>-</td><td>-</td><td><a class="gh-btn" href="https://github.com/anyme123/Any-code" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+    <tr><td><strong>codexia</strong></td><td>双 Agent 桌面 IDE</td><td><span class="tag tag-rust">Rust</span> <span class="tag tag-tauri">Tauri 2</span> + React 19</td><td>AGPL-3.0</td><td>0.28.3</td><td><a class="gh-btn" href="https://github.com/milisp/codexia" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+    <tr><td><strong>metabot</strong></td><td>IM 多平台 Agent Bridge</td><td><span class="tag tag-ts">TypeScript</span> Node.js</td><td>-</td><td>-</td><td><a class="gh-btn" href="https://github.com/xvirobotics/metabot" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+    <tr><td><strong>happy</strong></td><td>全平台加密 Claude 客户端</td><td><span class="tag tag-ts">TypeScript</span> Node.js / Expo</td><td>-</td><td>-</td><td><a class="gh-btn" href="https://github.com/slopus/happy" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+    <tr><td><strong>cc-connect</strong></td><td>多 Agent 多平台 Chat Bridge</td><td><span class="tag tag-go">Go</span></td><td>-</td><td>-</td><td><a class="gh-btn" href="https://github.com/chenhg5/cc-connect" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+    <tr><td><strong>nexu</strong></td><td>桌面 AI Agent 网关</td><td><span class="tag tag-ts">TypeScript</span> <span class="tag tag-electron">Electron</span> + Hono</td><td>-</td><td>-</td><td><a class="gh-btn" href="https://github.com/nexu-io/nexu" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Repo</a></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 二、Claude Code 连接方式 -->
+<section id="connection">
+<h2><span class="num">二</span>Claude Code 连接方式</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>项目</th><th>连接方式</th><th>通讯协议</th><th>双向交互</th><th>权限处理</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>opcode</strong></td><td>spawn 子进程</td><td>stdout JSONL 流</td><td><span class="partial">单向</span></td><td><code>--dangerously-skip-permissions</code></td></tr>
+    <tr><td><strong>Any-code</strong></td><td>spawn 子进程</td><td>stdout JSONL 流</td><td><span class="partial">单向</span></td><td>多模式 (Interactive/AcceptEdits/ReadOnly/Plan)</td></tr>
+    <tr><td><strong>codexia</strong></td><td>Claude Agent SDK (Rust)</td><td>SDK 事件回调</td><td><span class="y">双向</span></td><td>SDK hook 拦截 → 前端审批 → 回传</td></tr>
+    <tr><td><strong>metabot</strong></td><td>Claude Agent SDK (Node)</td><td>AsyncQueue + 异步流</td><td><span class="y">双向</span></td><td><code>bypassPermissions</code></td></tr>
+    <tr><td><strong>happy</strong></td><td>spawn + HTTP Hook + fd3</td><td>stdio 继承 + fd3 遥测 + HTTP</td><td><span class="partial">间接</span></td><td>多模式 (yolo/safe-yolo/plan/read-only)</td></tr>
+    <tr><td><strong>cc-connect</strong></td><td>spawn 子进程</td><td>stdin/stdout 双向 JSON 流</td><td><span class="y">完全双向</span></td><td>6 种模式</td></tr>
+    <tr><td><strong>nexu</strong></td><td>不直接连 Claude Code</td><td>WebSocket → OpenClaw Gateway</td><td><span class="partial">通过网关</span></td><td>网关管理</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Session ID 获取方式</h3>
+<div class="method-grid">
+  <div class="method-item">
+    <div class="label">解析 stdout init 消息</div>
+    <div class="value"><code>{type:"system", subtype:"init"}</code></div>
+    <div class="projects">opcode, Any-code, cc-connect</div>
+  </div>
+  <div class="method-item">
+    <div class="label">SDK 内部管理</div>
+    <div class="value">SDK 返回 session_id</div>
+    <div class="projects">codexia, metabot</div>
+  </div>
+  <div class="method-item">
+    <div class="label">HTTP Hook 回报</div>
+    <div class="value"><code>POST /hook/session-start</code></div>
+    <div class="projects">happy</div>
+  </div>
+  <div class="method-item">
+    <div class="label">网关管理</div>
+    <div class="value">OpenClaw Gateway 分配</div>
+    <div class="projects">nexu</div>
+  </div>
+</div>
+</section>
+
+<!-- 三、支持的 AI Agent -->
+<section id="agents">
+<h2><span class="num">三</span>支持的 AI Agent</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Agent</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Claude Code</strong></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td><strong>OpenAI Codex</strong></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>Google Gemini</strong></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td><strong>Cursor Agent</strong></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>Qoder CLI</strong></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>OpenCode</strong></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>iFlow CLI</strong></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>OpenClaw</strong></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td><strong>ACP</strong></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>多模型切换</strong></td><td><span class="n">-</span></td><td><span class="y">3 种</span></td><td><span class="y">2 种</span></td><td><span class="partial">via base_url</span></td><td><span class="y">4+ 种</span></td><td><span class="y">7 种</span></td><td><span class="y">10+ 种</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 四、平台与运行环境 -->
+<section id="platforms">
+<h2><span class="num">四</span>平台与运行环境</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>项目</th><th>桌面 App</th><th>Web UI</th><th>移动端</th><th>CLI</th><th>IM 平台</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>opcode</strong></td><td><span class="y">Win/Mac/Linux (Tauri)</span></td><td><span class="y">Axum + WebSocket</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>Any-code</strong></td><td><span class="y">Win/Mac/Linux (Tauri)</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>codexia</strong></td><td><span class="y">Win/Mac/Linux (Tauri)</span></td><td><span class="partial">Axum (计划中)</span></td><td><span class="partial">iOS (P2P)</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>metabot</strong></td><td><span class="n">-</span></td><td><span class="y">React Web UI</span></td><td><span class="n">-</span></td><td><span class="y">PM2 CLI</span></td><td><span class="y">飞书、Telegram、微信</span></td></tr>
+    <tr><td><strong>happy</strong></td><td><span class="partial">macOS (Tauri)</span></td><td><span class="y">Expo Web</span></td><td><span class="y">iOS、Android</span></td><td><span class="y">Node.js CLI</span></td><td><span class="n">-</span></td></tr>
+    <tr><td><strong>cc-connect</strong></td><td><span class="n">-</span></td><td><span class="y">React 管理面板</span></td><td><span class="n">-</span></td><td><span class="y">Go CLI</span></td><td><span class="y">飞书、钉钉、Telegram、Slack、Discord、企微、LINE、QQ、微信</span></td></tr>
+    <tr><td><strong>nexu</strong></td><td><span class="y">Win/Mac/Linux (Electron)</span></td><td><span class="y">React + Ant Design</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">微信、飞书、Slack、Discord、钉钉、Telegram、WhatsApp、QQ</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 五、会话管理 -->
+<section id="session">
+<h2><span class="num">五</span>会话管理</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>功能</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>会话历史</td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">24h TTL</span></td><td><span class="y">Y</span></td><td><span class="y">JSONL</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td>多 Tab 会话</td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>会话恢复/继续</td><td><span class="y">resume/continue</span></td><td><span class="y">resume/continue</span></td><td><span class="y">Y</span></td><td><span class="y">stale retry</span></td><td><span class="y">Y</span></td><td><span class="y">resume/fork</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td>多项目管理</td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">TOML 配置</span></td><td><span class="y">per bot</span></td></tr>
+    <tr><td>消息回滚</td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- Agent 与自动化 -->
+<section id="automation">
+<h2><span class="num">六</span>Agent 与自动化</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>功能</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>自定义 Agent</td><td><span class="y">CRUD + 预置</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">bots.json</span></td><td><span class="n">-</span></td><td><span class="y">多 agent 类型</span></td><td><span class="y">per bot</span></td></tr>
+    <tr><td>Agent 执行追踪</td><td><span class="y">DB 记录指标</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">cost/tokens</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td>定时任务/Cron</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="y">cron + 延时</span></td><td><span class="n">-</span></td><td><span class="y">自然语言</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>Hooks 自动化</td><td><span class="y">Y</span></td><td><span class="y">pre-commit 等</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">HTTP hook</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>多 Bot 编排</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Agent Bus + MetaSkill</span></td><td><span class="n">-</span></td><td><span class="y">relay 模式</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>跨实例联邦</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Peer Federation</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- MCP -->
+<section id="mcp">
+<h2><span class="num">七</span>MCP 支持</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>功能</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>MCP 管理</td><td><span class="y">Y</span></td><td><span class="y">完整 UI</span></td><td><span class="y">多作用域</span></td><td><span class="y">via SDK</span></td><td><span class="y">MCP bridge</span></td><td><span class="partial">有限</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>stdio 传输</td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>SSE 传输</td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>导入 Claude Desktop 配置</td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>MCP 市场/模板</td><td><span class="n">-</span></td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 语音 -->
+<section id="voice">
+<h2><span class="num">八</span>语音功能</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>功能</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>STT (语音转文字)</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">豆包 + Whisper + 流式</span></td><td><span class="n">-</span></td><td><span class="y">OpenAI / Qwen</span></td><td><span class="partial">微信原生</span></td></tr>
+    <tr><td>TTS (文字转语音)</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">豆包 + OpenAI + ElevenLabs + Edge</span></td><td><span class="y">ElevenLabs</span></td><td><span class="y">OpenAI / Qwen / eSpeak</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>实时语音通话</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">火山 RTC + 字幕</span></td><td><span class="y">ElevenLabs</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>语音会议</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">多 Bot</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+    <tr><td>流式 ASR</td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">WebSocket PCM</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 设置与配置 -->
+<section id="settings">
+<h2><span class="num">九</span>设置与配置</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>功能</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>图形化设置</td><td><span class="y">Y</span></td><td><span class="y">NoCode 编辑器</span></td><td><span class="y">多 Tab</span></td><td><span class="y">Web UI</span></td><td><span class="y">移动端</span></td><td><span class="y">Web 面板</span></td><td><span class="y">Electron UI</span></td></tr>
+    <tr><td>代理/Proxy</td><td><span class="y">Y</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">env</span></td><td><span class="n">-</span></td><td><span class="y">provider proxy</span></td><td><span class="y">Y</span></td></tr>
+    <tr><td>Claude 二进制管理</td><td><span class="y">多路径检测</span></td><td><span class="y">多路径 + 注册表</span></td><td><span class="y">SDK 内部</span></td><td><span class="y">env + which</span></td><td><span class="y">多路径</span></td><td><span class="y">LookPath</span></td><td><span class="partial">via Gateway</span></td></tr>
+    <tr><td>主题/外观</td><td><span class="y">Y</span></td><td><span class="y">Y</span></td><td><span class="y">accent + 主题</span></td><td><span class="y">dark/light</span></td><td><span class="n">-</span></td><td><span class="n">-</span></td><td><span class="y">Y</span></td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 独特功能 -->
+<section id="unique">
+<h2><span class="num">十</span>独特功能</h2>
+<div class="cards">
+
+  <div class="card" style="border-left: 3px solid var(--accent);">
+    <div class="card-title"><span style="color:var(--accent)">opcode</span> <a class="gh-btn" href="https://github.com/winfunc/opcode" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>Checkpoint 系统</strong> &mdash; Git 式快照，支持手动/自动（smart/per-prompt/per-tool），可 fork 分支</li>
+      <li><strong>Usage Dashboard</strong> &mdash; 按模型/日期/项目统计 token 和费用</li>
+      <li><strong>Web 模式</strong> &mdash; Axum 服务器 + WebSocket，手机远程访问</li>
+      <li><strong>GitHub Agent 浏览器</strong> &mdash; 从 GitHub 导入社区 Agent</li>
+    </ul>
+  </div>
+
+  <div class="card" style="border-left: 3px solid var(--green);">
+    <div class="card-title"><span style="color:var(--green)">Any-code</span> <a class="gh-btn" href="https://github.com/anyme123/Any-code" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>Auto-compact 上下文</strong> &mdash; 智能 token 监控 + 自动上下文压缩</li>
+      <li><strong>智能翻译中间件</strong> &mdash; 8 种内容提取策略，后台渐进式翻译</li>
+      <li><strong>消息回滚</strong> &mdash; 撤回 prompt 并自动回退到执行前状态</li>
+      <li><strong>费用追踪面板</strong> &mdash; 多模型定价、cache hit 率分析</li>
+    </ul>
+  </div>
+
+  <div class="card" style="border-left: 3px solid var(--purple);">
+    <div class="card-title"><span style="color:var(--purple)">codexia</span> <a class="gh-btn" href="https://github.com/milisp/codexia" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>P2P 远程控制</strong> &mdash; QUIC 隧道（桌面服务端 + iOS 客户端）</li>
+      <li><strong>Cloudflare Tunnel</strong> &mdash; 远程访问无需暴露端口</li>
+      <li><strong>自动化调度</strong> &mdash; Cron 定时任务，带执行历史</li>
+      <li><strong>插件/技能系统</strong> &mdash; 可扩展 slash 命令</li>
+      <li><strong>笔记系统</strong> &mdash; 内置笔记本，SQLite 持久化</li>
+      <li><strong>分析面板</strong> &mdash; 贡献热力图、token 分解</li>
+    </ul>
+  </div>
+
+  <div class="card" style="border-left: 3px solid var(--orange);">
+    <div class="card-title"><span style="color:var(--orange)">metabot</span> <a class="gh-btn" href="https://github.com/xvirobotics/metabot" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>Agent Bus</strong> &mdash; Bot 间通讯（<code>mb talk &lt;bot&gt;</code>）</li>
+      <li><strong>MetaSkill</strong> &mdash; 一键生成多 Agent 团队</li>
+      <li><strong>Peer Federation</strong> &mdash; 跨实例 Bot 发现与路由</li>
+      <li><strong>MetaMemory</strong> &mdash; 嵌入式知识库 + 全文搜索</li>
+      <li><strong>火山 RTC 语音</strong> &mdash; ASR→LLM→TTS 全链路 + 字幕</li>
+      <li><strong>团队预算管理</strong> &mdash; 每日预算 + Prometheus + 熔断器</li>
+      <li><strong>飞书技能集</strong> &mdash; 19 个预集成 AI 技能</li>
+    </ul>
+  </div>
+
+  <div class="card" style="border-left: 3px solid var(--pink);">
+    <div class="card-title"><span style="color:var(--pink)">happy</span> <a class="gh-btn" href="https://github.com/slopus/happy" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>零知识加密</strong> &mdash; E2E 加密（TweetNaCl + AES-256-GCM）</li>
+      <li><strong>fd3 遥测管道</strong> &mdash; 自定义 fd 拦截 API 状态</li>
+      <li><strong>多设备同步</strong> &mdash; 桌面/手机/Web 实时同步</li>
+      <li><strong>推送通知</strong> &mdash; 权限/完成等推送到手机</li>
+      <li><strong>Daemon 守护进程</strong> &mdash; 后台常驻，版本感知</li>
+      <li><strong>设备配对</strong> &mdash; 加密密钥交换</li>
+    </ul>
+  </div>
+
+  <div class="card" style="border-left: 3px solid var(--cyan);">
+    <div class="card-title"><span style="color:var(--cyan)">cc-connect</span> <a class="gh-btn" href="https://github.com/chenhg5/cc-connect" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>7 种 Agent 适配器</strong> &mdash; Claude、Codex、Cursor、Gemini、Qoder、OpenCode、iFlow</li>
+      <li><strong>10 种 IM 平台</strong> &mdash; 飞书、钉钉、Telegram、Slack、Discord 等</li>
+      <li><strong>Provider Proxy</strong> &mdash; 本地反代改写第三方 thinking 参数</li>
+      <li><strong>6 种权限模式</strong> &mdash; 最完整的权限控制</li>
+      <li><strong>自然语言 Cron</strong> &mdash; 聊天中设定定时任务</li>
+      <li><strong>附件回传</strong> &mdash; Agent 文件自动推送到聊天</li>
+      <li><strong>多语言 i18n</strong> &mdash; 中/英/日/西/繁体</li>
+    </ul>
+  </div>
+
+  <div class="card" style="border-left: 3px solid var(--yellow);">
+    <div class="card-title"><span style="color:var(--yellow)">nexu</span> <a class="gh-btn" href="https://github.com/nexu-io/nexu" target="_blank"><svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></div>
+    <ul>
+      <li><strong>双击安装</strong> &mdash; 全图形化设置，零 CLI 配置</li>
+      <li><strong>OpenClaw 控制平面</strong> &mdash; 本地管理 agent 生命周期</li>
+      <li><strong>10+ IM 渠道</strong> &mdash; 开箱即用的多平台连接</li>
+      <li><strong>多模型 BYOK</strong> &mdash; 10+ 提供商一键切换</li>
+      <li><strong>OAuth 登录</strong> &mdash; MiniMax、GLM 免密登录</li>
+      <li><strong>Skill 热重载</strong> &mdash; 技能目录实时监听</li>
+      <li><strong>本地优先</strong> &mdash; 数据全部存本地，无订阅</li>
+    </ul>
+  </div>
+
+</div>
+</section>
+
+<!-- 技术栈 -->
+<section id="techstack">
+<h2><span class="num">十一</span>技术栈对比</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>维度</th><th>opcode</th><th>Any-code</th><th>codexia</th><th>metabot</th><th>happy</th><th>cc-connect</th><th>nexu</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>后端语言</strong></td><td>Rust</td><td>Rust</td><td>Rust</td><td>TypeScript</td><td>TypeScript</td><td>Go</td><td>TypeScript</td></tr>
+    <tr><td><strong>桌面框架</strong></td><td>Tauri 2</td><td>Tauri 2</td><td>Tauri 2</td><td>-</td><td>Tauri 2 (macOS)</td><td>-</td><td>Electron</td></tr>
+    <tr><td><strong>前端框架</strong></td><td>React 18</td><td>React 18</td><td>React 19</td><td>React 19</td><td>React Native</td><td>React</td><td>React 19</td></tr>
+    <tr><td><strong>UI 组件</strong></td><td>Radix + Tailwind</td><td>Radix + Tailwind</td><td>shadcn + Tailwind</td><td>Zustand + MD</td><td>Expo</td><td>Zustand</td><td>Ant Design</td></tr>
+    <tr><td><strong>数据库</strong></td><td>SQLite</td><td>SQLite (WAL)</td><td>SQLite</td><td>SQLite</td><td>Postgres + SQLite</td><td>-</td><td>lowdb (JSON)</td></tr>
+    <tr><td><strong>Web 框架</strong></td><td>Axum</td><td>-</td><td>Axum</td><td>Node HTTP</td><td>Fastify</td><td>Go net/http</td><td>Hono</td></tr>
+    <tr><td><strong>构建工具</strong></td><td>Vite</td><td>Vite</td><td>Vite</td><td>tsc</td><td>Vite + Expo</td><td>Vite (Web)</td><td>Vite</td></tr>
+    <tr><td><strong>包管理</strong></td><td>bun</td><td>bun/npm</td><td>bun</td><td>npm</td><td>yarn</td><td>pnpm</td><td>pnpm</td></tr>
+    <tr><td><strong>异步运行时</strong></td><td>Tokio</td><td>Tokio</td><td>Tokio</td><td>Node.js</td><td>Node.js</td><td>goroutine</td><td>Node.js</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- 选型建议 -->
+<section id="recommend">
+<h2><span class="num">十二</span>架构复杂度与选型建议</h2>
+
+<div class="arch-bar">
+  <div class="arch-item">
+    <div class="arch-dot" style="background:var(--green);"></div>
+    <div class="arch-label">opcode / nexu</div>
+    <div class="arch-sub">轻量桌面</div>
+  </div>
+  <div class="arch-item">
+    <div class="arch-dot" style="background:var(--accent);"></div>
+    <div class="arch-label">Any-code / codexia</div>
+    <div class="arch-sub">功能桌面 GUI</div>
+  </div>
+  <div class="arch-item">
+    <div class="arch-dot" style="background:var(--orange);"></div>
+    <div class="arch-label">cc-connect</div>
+    <div class="arch-sub">多 Agent 多平台 Bridge</div>
+  </div>
+  <div class="arch-item">
+    <div class="arch-dot" style="background:var(--red);"></div>
+    <div class="arch-label">metabot / happy</div>
+    <div class="arch-sub">全平台 + 语音/加密/编排</div>
+  </div>
+</div>
+
+<div class="table-wrap rec-table">
+<table>
+  <thead>
+    <tr><th>需求</th><th>推荐项目</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>只需要 Claude Code 桌面 GUI</td><td>opcode（轻量）或 Any-code（功能丰富）</td></tr>
+    <tr><td>需要 Claude + Codex 双 Agent</td><td>codexia</td></tr>
+    <tr><td>接入飞书/钉钉/Telegram 等 IM</td><td>cc-connect（最多平台）或 metabot（更强编排）</td></tr>
+    <tr><td>需要语音交互</td><td>metabot（最完整）&gt; cc-connect &gt; happy</td></tr>
+    <tr><td>需要手机端控制</td><td>happy（iOS/Android）&gt; codexia（iOS P2P）</td></tr>
+    <tr><td>需要端到端加密</td><td>happy</td></tr>
+    <tr><td>需要多 Agent 类型切换</td><td>cc-connect（7 种）&gt; happy（4+ 种）</td></tr>
+    <tr><td>需要零配置桌面网关</td><td>nexu（双击安装）</td></tr>
+    <tr><td>需要多 Bot 编排/联邦</td><td>metabot</td></tr>
+    <tr><td>需要定时任务</td><td>cc-connect / metabot / codexia</td></tr>
+    <tr><td>需要 Checkpoint/快照</td><td>opcode</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+</div>
+
+<div class="footer">
+  Claude Code GUI/Bridge 项目功能对比 &mdash; 更新于 2026-04-06
+</div>
+
+</body>
+</html>

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { AuthProvider } from "./contexts/AuthContext";
 import "./assets/shimmer.css";
 import "./styles.css";
 import "./i18n"; // ✅ i18n 必须同步加载（App 立即需要使用）
@@ -72,7 +73,9 @@ const AppWrapper: React.FC = () => {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

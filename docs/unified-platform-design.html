@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Unified AI Agent Platform — Architecture Design v3</title>
+<style>
+:root{--bg:#0a0e17;--bg2:#111827;--bg3:#1a2332;--bg4:#243044;--border:#2a3a4e;--text:#e2e8f0;--text2:#8899aa;--text3:#556677;--blue:#60a5fa;--cyan:#22d3ee;--green:#34d399;--orange:#fb923c;--red:#f87171;--purple:#a78bfa;--pink:#f472b6;--yellow:#fbbf24;--indigo:#818cf8}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.7}
+.hero{padding:60px 24px 50px;text-align:center;background:linear-gradient(180deg,#0f1729 0%,var(--bg) 100%);position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 30% 40%,rgba(96,165,250,0.06) 0%,transparent 50%),radial-gradient(circle at 70% 60%,rgba(167,139,250,0.05) 0%,transparent 50%);pointer-events:none}
+.hero h1{font-size:2.6em;font-weight:800;background:linear-gradient(135deg,var(--blue),var(--purple),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;position:relative}
+.hero .sub{color:var(--text2);font-size:1.05em;max-width:750px;margin:0 auto 24px;position:relative}
+.hero .badges{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;position:relative}
+.badge{padding:5px 14px;border-radius:20px;font-size:0.82em;font-weight:600;border:1px solid}
+.b-rust{border-color:rgba(222,110,52,0.4);color:#de6e34;background:rgba(222,110,52,0.1)}
+.b-tauri{border-color:rgba(253,202,0,0.4);color:#fcc200;background:rgba(253,202,0,0.1)}
+.b-server{border-color:rgba(167,139,250,0.4);color:var(--purple);background:rgba(167,139,250,0.1)}
+.b-react{border-color:rgba(97,218,251,0.4);color:#61dafb;background:rgba(97,218,251,0.1)}
+.b-voice{border-color:rgba(244,114,182,0.4);color:var(--pink);background:rgba(244,114,182,0.1)}
+.b-mem{border-color:rgba(52,211,153,0.4);color:var(--green);background:rgba(52,211,153,0.1)}
+
+.nav{position:sticky;top:0;z-index:100;background:rgba(10,14,23,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);padding:0 24px}
+.nav-inner{max-width:1400px;margin:0 auto;display:flex;gap:2px;overflow-x:auto;padding:8px 0}
+.nav a{color:var(--text2);text-decoration:none;padding:6px 14px;border-radius:6px;font-size:0.83em;white-space:nowrap;transition:all 0.2s}
+.nav a:hover{background:var(--bg3);color:var(--text)}
+
+.container{max-width:1400px;margin:0 auto;padding:36px 24px}
+section{margin-bottom:56px}
+h2{font-size:1.6em;font-weight:700;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+h2 .n{color:var(--blue);margin-right:8px}
+h3{font-size:1.15em;font-weight:600;margin:24px 0 14px;color:var(--text)}
+h4{font-size:1em;font-weight:600;margin:18px 0 10px;color:var(--cyan)}
+p,li{color:var(--text2);font-size:0.92em}
+ul{padding-left:20px;margin:8px 0}
+li{margin:4px 0}
+li strong{color:var(--text)}
+code{background:var(--bg3);padding:2px 7px;border-radius:4px;font-size:0.88em;color:var(--cyan);font-family:'Fira Code',Consolas,monospace}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+
+.ad{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:32px 24px;overflow-x:auto;margin:16px 0}
+.ar{display:flex;gap:12px;margin:10px 0;align-items:stretch;justify-content:center;flex-wrap:wrap}
+.ab{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px 18px;text-align:center;min-width:130px;flex:1;max-width:220px;transition:border-color 0.2s}
+.ab:hover{border-color:var(--blue)}
+.ab .t{font-size:0.85em;font-weight:700;margin-bottom:4px}.ab .d{font-size:0.75em;color:var(--text2)}
+.aa{display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:1.2em;padding:6px 0}
+.al{text-align:center;font-size:0.78em;color:var(--text3);margin:10px 0;font-weight:600;letter-spacing:1px;text-transform:uppercase}
+.adv{border:none;border-top:1px dashed var(--border);margin:18px 0}
+.aw{max-width:100%;min-width:280px;flex:2}
+
+.c-bl{border-color:rgba(96,165,250,0.5)}.c-bl .t{color:var(--blue)}
+.c-gn{border-color:rgba(52,211,153,0.5)}.c-gn .t{color:var(--green)}
+.c-pu{border-color:rgba(167,139,250,0.5)}.c-pu .t{color:var(--purple)}
+.c-or{border-color:rgba(251,146,60,0.5)}.c-or .t{color:var(--orange)}
+.c-pk{border-color:rgba(244,114,182,0.5)}.c-pk .t{color:var(--pink)}
+.c-cy{border-color:rgba(34,211,238,0.5)}.c-cy .t{color:var(--cyan)}
+.c-yl{border-color:rgba(251,191,36,0.5)}.c-yl .t{color:var(--yellow)}
+.c-rd{border-color:rgba(248,113,113,0.5)}.c-rd .t{color:var(--red)}
+.c-in{border-color:rgba(129,140,248,0.5)}.c-in .t{color:var(--indigo)}
+
+.tw{overflow-x:auto;border:1px solid var(--border);border-radius:8px;margin:16px 0}
+table{width:100%;border-collapse:collapse;font-size:0.88em}
+thead{background:var(--bg2)}
+th{padding:11px 14px;text-align:left;font-weight:600;color:var(--text);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid rgba(42,58,78,0.5);color:var(--text2)}
+tr:hover td{background:rgba(96,165,250,0.03)}
+td:first-child{color:var(--text);font-weight:500}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin:16px 0}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;transition:border-color 0.2s}
+.card:hover{border-color:var(--blue)}
+.card-h{font-size:1.05em;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card ul{list-style:none;padding:0}
+.card li{padding:3px 0;font-size:0.88em;display:flex;gap:8px;align-items:flex-start}
+.card li::before{content:">";color:var(--blue);font-weight:700;flex-shrink:0}
+
+.flow{display:flex;gap:0;margin:16px 0;flex-wrap:wrap;align-items:center}
+.fs{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:105px}
+.fs .nm{display:inline-block;width:24px;height:24px;line-height:24px;border-radius:50%;background:var(--blue);color:var(--bg);font-size:0.75em;font-weight:700;margin-bottom:6px}
+.fs .ft{font-size:0.82em;font-weight:600;color:var(--text)}
+.fs .fd{font-size:0.72em;color:var(--text2);margin-top:2px}
+.fa{color:var(--text3);font-size:1.2em;padding:0 4px;flex-shrink:0}
+
+.tg{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.78em;font-weight:600}
+.tg-g{background:rgba(52,211,153,0.15);color:var(--green)}
+.tg-b{background:rgba(96,165,250,0.15);color:var(--blue)}
+.tg-p{background:rgba(167,139,250,0.15);color:var(--purple)}
+.tg-o{background:rgba(251,146,60,0.15);color:var(--orange)}
+
+pre{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;font-size:0.84em;line-height:1.6;color:var(--cyan);font-family:'Fira Code',Consolas,monospace;margin:12px 0}
+.cm{color:var(--text3)}.k{color:var(--purple)}.s{color:var(--green)}.tp{color:var(--orange)}.fn{color:var(--blue)}
+.hl{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;margin:16px 0}
+.rg{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.rb{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px}
+.rb h4{margin-top:0}
+@media(max-width:768px){.rg{grid-template-columns:1fr}}
+.footer{text-align:center;padding:40px 0;color:var(--text3);font-size:0.85em;border-top:1px solid var(--border);margin-top:40px}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Unified AI Agent Platform</h1>
+  <p class="sub">Tauri 客户端 spawn Agent &bull; Server 管控 + Memory &bull; 浏览器管理<br>客户端持有 Agent 配置 &amp; IM 配置 &bull; Server 统一状态 &amp; 记忆</p>
+  <div class="badges">
+    <span class="badge b-tauri">Tauri 2 客户端</span>
+    <span class="badge b-rust">Rust</span>
+    <span class="badge b-server">Server 管控</span>
+    <span class="badge b-react">React 19</span>
+    <span class="badge b-voice">STT / TTS</span>
+    <span class="badge b-mem">Memory</span>
+  </div>
+</div>
+
+<nav class="nav"><div class="nav-inner">
+  <a href="#split">职责划分</a>
+  <a href="#arch">整体架构</a>
+  <a href="#client">Tauri 客户端</a>
+  <a href="#claude">Claude 连接</a>
+  <a href="#agent">多 Agent</a>
+  <a href="#im">微信 + 飞书</a>
+  <a href="#server">Server 管控</a>
+  <a href="#memory">Memory</a>
+  <a href="#voice">语音</a>
+  <a href="#skills">Skills</a>
+  <a href="#sync">状态同步</a>
+  <a href="#data">数据层</a>
+  <a href="#crates">Crate 拆分</a>
+  <a href="#roadmap">实施路线</a>
+</div></nav>
+
+<div class="container">
+
+<!-- ════════════════════════════════════════ -->
+<section id="split">
+<h2><span class="n">01</span>职责划分</h2>
+
+<div class="rg">
+  <div class="rb" style="border-left:3px solid var(--cyan)">
+    <h4 style="color:var(--cyan)">Tauri 客户端（重 — 执行层）</h4>
+    <ul>
+      <li><strong>spawn Agent CLI</strong>（Claude / Codex / Gemini / OpenClaw）</li>
+      <li><strong>三层通讯</strong>：stdio + fd3 遥测 + HTTP Hook（Happy 模式）</li>
+      <li><strong>Agent 配置</strong>：二进制路径、模型、权限模式、API Key</li>
+      <li><strong>IM 配置 + 连接</strong>：微信 iLink / 飞书 WebSocket</li>
+      <li><strong>Skills 加载 + 执行</strong>：本地 YAML 热重载</li>
+      <li><strong>语音处理</strong>：STT / TTS（调用远程 API 或本地 Edge）</li>
+      <li><strong>桌面 GUI</strong>：React UI + Tauri IPC</li>
+      <li><strong>上报状态</strong>：定时向 Server 同步客户端状态</li>
+    </ul>
+  </div>
+  <div class="rb" style="border-left:3px solid var(--purple)">
+    <h4 style="color:var(--purple)">Server（轻 — 管控层）</h4>
+    <ul>
+      <li><strong>用户认证</strong>：JWT 登录、角色（Admin / User）</li>
+      <li><strong>客户端注册 + 状态聚合</strong>：在线/离线、活跃会话</li>
+      <li><strong>管理员面板</strong>：Web UI 管理所有客户端</li>
+      <li><strong>Memory 存储 + 检索</strong>：集中式长期记忆</li>
+      <li><strong>配额 + 用量统计</strong>：Token、费用、审计日志</li>
+      <li><strong>用户 Web 面板</strong>：浏览器查看自己客户端状态</li>
+      <li><strong>不 spawn 任何 Agent</strong></li>
+      <li><strong>不持有 IM 连接</strong></li>
+    </ul>
+  </div>
+</div>
+
+<div class="hl">
+<h4>一句话总结</h4>
+<p><strong>客户端是手脚</strong>（spawn Agent、连 IM、执行 Skill），<strong>Server 是大脑</strong>（记忆、管控、统计）。客户端可以离线独立工作；Server 提供跨客户端的记忆共享和管理员视野。</p>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="arch">
+<h2><span class="n">02</span>整体架构</h2>
+
+<div class="ad">
+  <div class="al">Tauri 客户端 — 每台机器一个实例</div>
+  <div class="ar">
+    <div class="ab c-cy aw">
+      <div class="t">React 19 桌面 GUI</div>
+      <div class="d">对话 &bull; 会话历史 &bull; Agent/IM/Skill 配置 &bull; Memory 浏览 &bull; 语音输入/输出</div>
+    </div>
+  </div>
+  <div class="aa">&#8597; Tauri IPC &#8597;</div>
+  <div class="ar">
+    <div class="ab c-cy">
+      <div class="t">Agent Supervisor</div>
+      <div class="d">spawn CLI 进程<br>stdio + fd3 + Hook<br>进程池 &bull; 健康检查</div>
+    </div>
+    <div class="ab c-gn">
+      <div class="t">IM Connector</div>
+      <div class="d">微信 iLink WS<br>飞书 Lark WS<br>消息路由</div>
+    </div>
+    <div class="ab c-pk">
+      <div class="t">Voice Engine</div>
+      <div class="d">STT &bull; TTS<br>录音 &bull; 播放<br>SILK 转码</div>
+    </div>
+    <div class="ab c-or">
+      <div class="t">Skill Runtime</div>
+      <div class="d">YAML 热重载<br>Hook 触发 &bull; Cron</div>
+    </div>
+  </div>
+
+  <div class="aa">&#8595; spawn + stdio + fd3 + Hook &#8595;</div>
+
+  <div class="al">Agent 进程 — 客户端本地子进程</div>
+  <div class="ar">
+    <div class="ab c-bl"><div class="t">Claude Code</div><div class="d">Happy 三层模式</div></div>
+    <div class="ab c-gn"><div class="t">OpenAI Codex</div><div class="d">JSON-RPC stdio</div></div>
+    <div class="ab c-or"><div class="t">Google Gemini</div><div class="d">CLI stream</div></div>
+    <div class="ab c-cy"><div class="t">OpenClaw</div><div class="d">WS Gateway</div></div>
+  </div>
+
+  <hr class="adv">
+
+  <div class="aa">&#8593; WebSocket 状态上报 + Memory 读写 &#8593;</div>
+
+  <div class="al">Server — 集中管控 (Rust Axum)</div>
+  <div class="ar">
+    <div class="ab c-pu">
+      <div class="t">Gateway</div>
+      <div class="d">JWT 认证<br>Admin / User 路由</div>
+    </div>
+    <div class="ab c-pu">
+      <div class="t">Client Registry</div>
+      <div class="d">客户端注册<br>状态聚合 &bull; 心跳</div>
+    </div>
+    <div class="ab c-gn">
+      <div class="t">Memory Engine</div>
+      <div class="d">存储 &bull; 向量检索<br>衰减 &bull; 去重</div>
+    </div>
+    <div class="ab c-yl">
+      <div class="t">Quota &amp; Stats</div>
+      <div class="d">配额管理<br>用量统计 &bull; 审计</div>
+    </div>
+  </div>
+  <div class="ar">
+    <div class="ab c-or">
+      <div class="t">Admin Web UI</div>
+      <div class="d">管理员浏览器面板<br>管理所有客户端</div>
+    </div>
+    <div class="ab c-bl">
+      <div class="t">User Web UI</div>
+      <div class="d">用户浏览器面板<br>查看自己客户端</div>
+    </div>
+    <div class="ab c-in">
+      <div class="t">SQLite + 向量</div>
+      <div class="d">用户 &bull; 客户端状态<br>Memory &bull; 审计日志</div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="client">
+<h2><span class="n">03</span>Tauri 客户端</h2>
+
+<h3>3.1 本地配置</h3>
+<pre><span class="cm">// ~/.ua/config.toml — 客户端本地配置</span>
+
+[server]
+<span class="k">url</span> = <span class="s">"https://your-server.com"</span>   <span class="cm"># Server 地址</span>
+<span class="k">token</span> = <span class="s">"jwt-xxx"</span>                  <span class="cm"># 登录后缓存的 JWT</span>
+
+[agent.claude]
+<span class="k">binary</span> = <span class="s">"auto"</span>                    <span class="cm"># auto = 自动检测 | 或指定路径</span>
+<span class="k">model</span> = <span class="s">"sonnet"</span>
+<span class="k">permission_mode</span> = <span class="s">"acceptEdits"</span>
+<span class="k">api_key_source</span> = <span class="s">"credentials"</span>    <span class="cm"># credentials | env | custom</span>
+
+[agent.codex]
+<span class="k">enabled</span> = true
+
+[agent.gemini]
+<span class="k">enabled</span> = true
+<span class="k">auth_mode</span> = <span class="s">"oauth"</span>              <span class="cm"># oauth | api_key | vertex</span>
+
+[agent.openclaw]
+<span class="k">enabled</span> = false
+<span class="k">gateway_url</span> = <span class="s">"wss://gateway.openclaw.io"</span>
+
+[im.wechat]
+<span class="k">enabled</span> = true
+<span class="k">ilink_ws</span> = <span class="s">"ws://127.0.0.1:9001"</span>
+
+[im.feishu]
+<span class="k">enabled</span> = true
+<span class="k">app_id</span> = <span class="s">"cli_xxx"</span>
+<span class="k">app_secret</span> = <span class="s">"xxx"</span>
+
+[voice]
+<span class="k">stt_provider</span> = <span class="s">"doubao"</span>          <span class="cm"># doubao | whisper</span>
+<span class="k">tts_provider</span> = <span class="s">"edge"</span>            <span class="cm"># edge | doubao | openai | elevenlabs</span>
+
+[skills]
+<span class="k">dir</span> = <span class="s">"~/.ua/skills"</span>             <span class="cm"># Skills 目录</span></pre>
+
+<h3>3.2 客户端启动流程</h3>
+<div class="flow">
+  <div class="fs"><div class="nm">1</div><div class="ft">启动</div><div class="fd">Tauri 桌面窗口<br>加载本地配置</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">2</div><div class="ft">检测 Agent</div><div class="fd">扫描 claude/codex<br>gemini 二进制</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">3</div><div class="ft">连接 Server</div><div class="fd">WebSocket 注册<br>上报客户端信息</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">4</div><div class="ft">拉取 Memory</div><div class="fd">从 Server 获取<br>相关记忆缓存</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">5</div><div class="ft">连接 IM</div><div class="fd">启动微信/飞书<br>WebSocket 连接</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">6</div><div class="ft">就绪</div><div class="fd">加载 Skills<br>显示主界面</div></div>
+</div>
+
+<h3>3.3 客户端桌面 GUI 页面</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>页面</th><th>功能</th></tr></thead>
+  <tbody>
+    <tr><td><strong>对话</strong></td><td>主聊天界面 — Markdown + 代码高亮 + 工具调用卡片 + 语音按钮</td></tr>
+    <tr><td><strong>会话历史</strong></td><td>按项目/时间浏览、搜索、恢复/继续历史会话</td></tr>
+    <tr><td><strong>Memory</strong></td><td>记忆列表 + 搜索 + 手动添加/编辑/删除（数据来自 Server）</td></tr>
+    <tr><td><strong>Agent 配置</strong></td><td>Agent 检测结果、模型选择、权限模式、API Key</td></tr>
+    <tr><td><strong>IM 配置</strong></td><td>微信/飞书 Bot 凭证、绑定规则、消息日志</td></tr>
+    <tr><td><strong>Skills</strong></td><td>Skill 列表、参数配置、手动触发、Cron 管理</td></tr>
+    <tr><td><strong>设置</strong></td><td>Server 连接、语音、主题、通知</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="claude">
+<h2><span class="n">04</span>Claude Code 连接（Happy 模式）</h2>
+
+<div class="hl">
+<p>客户端本地 spawn Claude Code 进程，通过三层通讯管理。参考 Happy 的 spawn + HTTP Hook + fd3 架构。</p>
+</div>
+
+<div class="ad">
+  <div class="ar">
+    <div class="ab c-bl" style="max-width:300px">
+      <div class="t">通道 1: stdio 管道</div>
+      <div class="d">
+        <strong>stdin</strong> ← 用户消息写入<br>
+        <strong>stdout</strong> → Agent 输出逐行读取<br>
+        <code>--output-format stream-json</code>
+      </div>
+    </div>
+    <div class="ab c-pk" style="max-width:300px">
+      <div class="t">通道 2: fd3 遥测</div>
+      <div class="d">
+        拦截 Claude 内部 fetch<br>
+        <code>fetch-start</code> / <code>fetch-end</code><br>
+        驱动 UI "思考中…" 状态
+      </div>
+    </div>
+    <div class="ab c-gn" style="max-width:300px">
+      <div class="t">通道 3: HTTP Hook</div>
+      <div class="d">
+        客户端启动 per-session 端口<br>
+        <code>POST /hook/session-start</code><br>
+        获取 session_id + transcript
+      </div>
+    </div>
+  </div>
+</div>
+
+<pre><span class="cm">// 客户端 Agent Supervisor 内部伪码</span>
+
+<span class="k">async fn</span> <span class="fn">spawn_claude</span>(config: &<span class="tp">AgentConfig</span>, prompt: &str, memory_ctx: &str) {
+    <span class="cm">// 1. 生成 Hook 配置文件</span>
+    <span class="k">let</span> hook_port = random_port();
+    <span class="k">let</span> hook_settings = generate_hook_settings(hook_port);
+
+    <span class="cm">// 2. 构建启动参数</span>
+    <span class="k">let</span> args = vec![
+        <span class="s">"--session-id"</span>, &uuid(),
+        <span class="s">"--model"</span>, &config.model,
+        <span class="s">"--permission-mode"</span>, &config.permission_mode,
+        <span class="s">"--settings"</span>, &hook_settings.path,
+        <span class="s">"--append-system-prompt"</span>, memory_ctx,  <span class="cm">// Memory 注入</span>
+    ];
+
+    <span class="cm">// 3. spawn 进程（stdio piped + fd3 piped）</span>
+    <span class="k">let</span> child = Command::new(&config.binary)
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .fd3(Stdio::piped())
+        .current_dir(&project_path)
+        .env_remove_claude_vars()
+        .spawn()?;
+
+    <span class="cm">// 4. 启动三个并行读取 task</span>
+    tokio::join!(
+        read_stdout(child.stdout, event_tx.clone()),   <span class="cm">// 通道1</span>
+        read_fd3(child.fd3, event_tx.clone()),          <span class="cm">// 通道2</span>
+        listen_hook(hook_port, event_tx.clone()),        <span class="cm">// 通道3</span>
+    );
+
+    <span class="cm">// 5. 事件汇聚后：</span>
+    <span class="cm">//   → Tauri emit 到前端 UI</span>
+    <span class="cm">//   → 转发到 IM 通道</span>
+    <span class="cm">//   → 上报 Server（状态 + 用量）</span>
+    <span class="cm">//   → 提取记忆 → 写入 Server Memory</span>
+}</pre>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="agent">
+<h2><span class="n">05</span>多 Agent 支持</h2>
+
+<div class="tw">
+<table>
+  <thead><tr><th>Agent</th><th>客户端连接方式</th><th>Session 获取</th><th>特殊处理</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Claude Code</strong></td><td>spawn + fd3 + Hook</td><td>Hook 回报 session_id</td><td>fd3 遥测 + Memory 注入 system prompt</td></tr>
+    <tr><td><strong>OpenAI Codex</strong></td><td>spawn codex app-server + JSON-RPC stdio</td><td>new_conversation → id</td><td>MCP 透传 + 权限映射</td></tr>
+    <tr><td><strong>Google Gemini</strong></td><td>spawn gemini CLI + stream JSON stdout</td><td>CLI 内部管理</td><td>三种认证自动选择</td></tr>
+    <tr><td><strong>OpenClaw</strong></td><td>WebSocket 连 Gateway</td><td>Gateway 分配</td><td>Ed25519 + 30s 心跳</td></tr>
+  </tbody>
+</table>
+</div>
+
+<pre><span class="cm">/// 统一 Agent Trait — 在客户端 crate 内实现</span>
+<span class="k">#[async_trait]</span>
+<span class="k">pub trait</span> <span class="tp">Agent</span>: Send + Sync {
+    <span class="k">fn</span> <span class="fn">agent_type</span>(&self) -> &str;
+    <span class="k">async fn</span> <span class="fn">detect</span>(&self) -> <span class="tp">Result&lt;AgentInfo&gt;</span>;
+    <span class="k">async fn</span> <span class="fn">start</span>(&self, cfg: <span class="tp">SessionConfig</span>, memory: &str) -> <span class="tp">Result&lt;AgentSession&gt;</span>;
+    <span class="k">async fn</span> <span class="fn">send</span>(&self, session: &<span class="tp">AgentSession</span>, msg: <span class="tp">UserMessage</span>) -> <span class="tp">Result&lt;()&gt;</span>;
+    <span class="k">fn</span> <span class="fn">events</span>(&self, session: &<span class="tp">AgentSession</span>) -> <span class="tp">EventStream</span>;
+    <span class="k">async fn</span> <span class="fn">resume</span>(&self, session_id: &str) -> <span class="tp">Result&lt;AgentSession&gt;</span>;
+    <span class="k">async fn</span> <span class="fn">stop</span>(&self, session: &<span class="tp">AgentSession</span>) -> <span class="tp">Result&lt;()&gt;</span>;
+}</pre>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="im">
+<h2><span class="n">06</span>微信 + 飞书（客户端本地连接）</h2>
+
+<div class="hl">
+<p>IM 连接器运行在 <strong>Tauri 客户端内部</strong>，配置也在客户端本地。IM 消息到达后，客户端直接路由到本地 Agent 进程。</p>
+</div>
+
+<pre><span class="cm">// IM 消息处理流程（全部在客户端内完成）</span>
+
+IM 消息到达（微信/飞书）
+  │
+  ├─ 语音消息? → SILK 转 WAV → STT → 得到文字
+  │
+  ├─ 文字消息 → 向 Server 请求 Memory 召回
+  │              ← Server 返回相关记忆 Top-K
+  │
+  ├─ 拼接 Memory 上下文 → --append-system-prompt
+  │
+  ├─ 写入 Agent stdin
+  │
+  ├─ Agent stdout 输出 → 分块
+  │    ├─ → IM 回复（文字 / 卡片）
+  │    ├─ → 可选 TTS → IM 语音回复
+  │    └─ → 上报 Server（用量 + 事件）
+  │
+  └─ 会话结束 → 提取记忆 → 写入 Server Memory</pre>
+
+<h3>IM 绑定配置</h3>
+<pre><span class="cm">// ~/.ua/config.toml — IM 部分</span>
+
+[im.wechat]
+<span class="k">enabled</span> = true
+<span class="k">ilink_ws</span> = <span class="s">"ws://127.0.0.1:9001"</span>
+<span class="k">allowed_users</span> = [<span class="s">"wxid_alice"</span>, <span class="s">"wxid_bob"</span>]  <span class="cm"># 白名单</span>
+<span class="k">default_agent</span> = <span class="s">"claude"</span>
+<span class="k">voice_reply</span> = true
+
+[im.feishu]
+<span class="k">enabled</span> = true
+<span class="k">app_id</span> = <span class="s">"cli_xxx"</span>
+<span class="k">app_secret</span> = <span class="s">"xxx"</span>
+<span class="k">allowed_groups</span> = [<span class="s">"oc_group_123"</span>]   <span class="cm"># 允许的群</span>
+<span class="k">default_agent</span> = <span class="s">"claude"</span></pre>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="server">
+<h2><span class="n">07</span>Server 管控</h2>
+
+<h3>7.1 Server 做什么</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>模块</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Client Registry</strong></td><td>客户端 WebSocket 注册、心跳（30s）、在线/离线/活跃状态聚合</td></tr>
+    <tr><td><strong>Memory Engine</strong></td><td>集中式记忆存储 + 向量检索，所有客户端共享（按 user 隔离）</td></tr>
+    <tr><td><strong>Quota Manager</strong></td><td>每用户/每客户端 Token 配额、月度/日度限制、超额告警</td></tr>
+    <tr><td><strong>Stats Collector</strong></td><td>接收客户端上报的用量数据，汇总统计面板</td></tr>
+    <tr><td><strong>Audit Log</strong></td><td>记录所有客户端的操作事件：会话开始/结束、IM 消息、Skill 执行</td></tr>
+    <tr><td><strong>Admin Web UI</strong></td><td>管理员浏览器面板：所有客户端卡片 + 实时状态 + 操作按钮</td></tr>
+    <tr><td><strong>User Web UI</strong></td><td>用户浏览器面板：查看自己客户端状态 + Memory 管理 + 用量</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>7.2 管理员 Web 面板</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>页面</th><th>路由</th><th>功能</th></tr></thead>
+  <tbody>
+    <tr><td><strong>仪表盘</strong></td><td><code>/admin</code></td><td>在线客户端数、活跃会话、今日 Token/费用、Agent 分布图</td></tr>
+    <tr><td><strong>客户端列表</strong></td><td><code>/admin/clients</code></td><td>卡片视图：状态灯、Agent 类型、所有者、CPU/内存、最近活动</td></tr>
+    <tr><td><strong>客户端详情</strong></td><td><code>/admin/clients/:id</code></td><td>实时状态、当前会话、Agent 配置（只读）、IM 绑定、Memory 条目数、操作按钮</td></tr>
+    <tr><td><strong>用户管理</strong></td><td><code>/admin/users</code></td><td>创建/禁用用户、设置配额、查看拥有的客户端</td></tr>
+    <tr><td><strong>用量统计</strong></td><td><code>/admin/stats</code></td><td>全局用量趋势、按用户/Agent/日期细分、费用报表</td></tr>
+    <tr><td><strong>审计日志</strong></td><td><code>/admin/audit</code></td><td>实时日志流、筛选（用户/客户端/操作类型/时间）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>7.3 用户 Web 面板</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>页面</th><th>路由</th><th>功能</th></tr></thead>
+  <tbody>
+    <tr><td><strong>我的客户端</strong></td><td><code>/</code></td><td>自己拥有的客户端列表、在线/离线状态、快速查看</td></tr>
+    <tr><td><strong>Memory</strong></td><td><code>/memory</code></td><td>记忆列表 + 语义搜索 + CRUD + 按类型筛选 + 权重可视化</td></tr>
+    <tr><td><strong>用量</strong></td><td><code>/usage</code></td><td>个人 Token 消耗、费用、配额剩余</td></tr>
+    <tr><td><strong>设置</strong></td><td><code>/settings</code></td><td>修改密码、通知偏好</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="hl">
+<h4>管理员对客户端的操作</h4>
+<p>管理员通过 Web 面板查看状态，但<strong>操作指令通过 Server → WebSocket → 客户端</strong>下发执行：</p>
+<ul>
+  <li><strong>请求停止</strong> — Server 发 <code>stop_agent</code> 指令 → 客户端执行 kill</li>
+  <li><strong>请求重启</strong> — Server 发 <code>restart_agent</code> → 客户端重新 spawn</li>
+  <li><strong>冻结客户端</strong> — Server 拒绝该客户端的新会话请求，标记为 Frozen</li>
+  <li><strong>修改配额</strong> — Server 直接更新配额 → 下次客户端上报用量时生效</li>
+</ul>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="memory">
+<h2><span class="n">08</span>Memory 系统</h2>
+
+<div class="hl">
+<p>Memory 存储在 Server 上，按用户隔离。客户端在每次对话前向 Server 请求相关记忆，对话后提取新记忆写回 Server。</p>
+</div>
+
+<h3>8.1 四种记忆类型</h3>
+<div class="cards">
+  <div class="card" style="border-left:3px solid var(--blue)">
+    <div class="card-h" style="color:var(--blue)">user — 用户画像</div>
+    <ul>
+      <li>角色、技术栈、偏好、工作方式</li>
+      <li>例："Rust 高级开发者，偏好零成本抽象"</li>
+    </ul>
+  </div>
+  <div class="card" style="border-left:3px solid var(--green)">
+    <div class="card-h" style="color:var(--green)">feedback — 行为反馈</div>
+    <ul>
+      <li>用户纠正或确认的做法 + Why + How to apply</li>
+      <li>例："不 mock 数据库，因为上次导致线上事故"</li>
+    </ul>
+  </div>
+  <div class="card" style="border-left:3px solid var(--purple)">
+    <div class="card-h" style="color:var(--purple)">project — 项目上下文</div>
+    <ul>
+      <li>目标、决策、约束、截止日期</li>
+      <li>例："v2.0 auth 重构，合规驱动，截止 4/15"</li>
+    </ul>
+  </div>
+  <div class="card" style="border-left:3px solid var(--orange)">
+    <div class="card-h" style="color:var(--orange)">reference — 外部资源</div>
+    <ul>
+      <li>外部系统中信息的指针</li>
+      <li>例："Bug 跟踪在 Linear INGEST 项目"</li>
+    </ul>
+  </div>
+</div>
+
+<h3>8.2 数据模型</h3>
+<pre><span class="k">struct</span> <span class="tp">MemoryEntry</span> {
+    id:            <span class="tp">Uuid</span>,
+    user_id:       <span class="tp">UserId</span>,          <span class="cm">// 按用户隔离</span>
+    memory_type:   <span class="tp">MemoryType</span>,      <span class="cm">// User | Feedback | Project | Reference</span>
+    title:         <span class="tp">String</span>,          <span class="cm">// 简短标题</span>
+    content:       <span class="tp">String</span>,          <span class="cm">// Markdown 内容</span>
+    embedding:     <span class="tp">Vec&lt;f32&gt;</span>,        <span class="cm">// 向量嵌入</span>
+    relevance:     <span class="tp">f32</span>,             <span class="cm">// 相关性权重（随时间衰减）</span>
+    access_count:  <span class="tp">u32</span>,             <span class="cm">// 被召回次数</span>
+    source:        <span class="tp">MemorySource</span>,    <span class="cm">// Auto | Manual | IM</span>
+    source_client: <span class="tp">Option&lt;String&gt;</span>,  <span class="cm">// 产生这条记忆的客户端名称</span>
+    created_at:    <span class="tp">DateTime</span>,
+    updated_at:    <span class="tp">DateTime</span>,
+}</pre>
+
+<h3>8.3 客户端 ↔ Server Memory 交互</h3>
+<div class="flow">
+  <div class="fs"><div class="nm">1</div><div class="ft">用户发消息</div><div class="fd">客户端收到<br>用户 prompt</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">2</div><div class="ft">请求召回</div><div class="fd">客户端 → Server<br><code>memory_recall</code><br>发送 prompt 文本</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">3</div><div class="ft">Server 检索</div><div class="fd">语义相似度 Top-K<br>+ 类型加权<br>+ 衰减修正</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">4</div><div class="ft">返回记忆</div><div class="fd">Server → 客户端<br>返回相关记忆列表</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">5</div><div class="ft">注入 Agent</div><div class="fd">客户端拼接到<br>system prompt<br>写入 Agent stdin</div></div>
+</div>
+<div class="flow" style="margin-top:12px">
+  <div class="fs"><div class="nm">6</div><div class="ft">对话结束</div><div class="fd">Agent 会话完成<br>或达到里程碑</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">7</div><div class="ft">提取记忆</div><div class="fd">客户端用 LLM<br>分析对话提取<br>新记忆条目</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">8</div><div class="ft">写入 Server</div><div class="fd"><code>memory_write</code><br>含标题+内容+类型</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">9</div><div class="ft">Server 处理</div><div class="fd">生成 embedding<br>去重检查<br>冲突合并</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="fs"><div class="nm">10</div><div class="ft">存储</div><div class="fd">写入 SQLite<br>+ 向量索引</div></div>
+</div>
+
+<h3>8.4 记忆衰减与维护</h3>
+<div class="tw">
+<table>
+  <thead><tr><th>机制</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><strong>时间衰减</strong></td><td>每天 Server 后台 task 将长期未访问的记忆 relevance × 0.98，低于 0.1 标记归档</td></tr>
+    <tr><td><strong>召回提升</strong></td><td>每次被召回 relevance += 0.1（上限 1.0），access_count++</td></tr>
+    <tr><td><strong>冲突替换</strong></td><td>新记忆与旧记忆语义相似度 > 0.9 时，合并更新而非新增</td></tr>
+    <tr><td><strong>容量淘汰</strong></td><td>超过用户配额时，归档 relevance 最低的条目</td></tr>
+    <tr><td><strong>手动管理</strong></td><td>用户通过 Web UI 或桌面 GUI 查看、编辑、删除记忆</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>8.5 Memory 注入格式</h3>
+<pre><span class="cm">// 拼接到 --append-system-prompt 注入 Agent</span>
+<span class="s">## 相关记忆
+
+### [user] 用户角色
+Rust 高级开发者，偏好零成本抽象，避免不必要的 clone。
+
+### [feedback] 测试规范
+集成测试必须用真实数据库，不要 mock。
+**Why:** 上季度 mock 通过但线上迁移失败。
+
+### [project] 当前迭代
+v2.0 auth 中间件重构，合规驱动。截止 2026-04-15。
+
+### [reference] 监控
+API 延迟看板：grafana.internal/d/api-latency</span></pre>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="voice">
+<h2><span class="n">09</span>语音系统（客户端本地处理）</h2>
+
+<div class="tw">
+<table>
+  <thead><tr><th></th><th>提供商</th><th>运行位置</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="2"><strong>STT</strong></td><td>豆包 Flash ASR</td><td>客户端调远程 API</td><td>中文最优，支持热词</td></tr>
+    <tr><td>Whisper</td><td>客户端调 OpenAI API</td><td>多语言回退</td></tr>
+    <tr><td rowspan="4"><strong>TTS</strong></td><td>Edge TTS</td><td>客户端本地</td><td>免费默认，无需 Key</td></tr>
+    <tr><td>豆包 TTS</td><td>客户端调远程 API</td><td>中文流式</td></tr>
+    <tr><td>OpenAI TTS</td><td>客户端调远程 API</td><td>英文自然</td></tr>
+    <tr><td>ElevenLabs</td><td>客户端调远程 API</td><td>最高质量</td></tr>
+  </tbody>
+</table>
+</div>
+
+<pre><span class="cm">// 语音处理全部在客户端完成</span>
+
+<span class="cm">// 桌面语音输入</span>
+麦克风 → MediaRecorder (WebM) → Tauri IPC → PCM 16kHz → STT API → 文字 → Agent
+
+<span class="cm">// 微信语音输入</span>
+微信 SILK → 下载 → silk-decode → WAV → STT API → 文字 → Agent
+
+<span class="cm">// TTS 输出</span>
+Agent 回复 → TTS API → 音频 → 桌面播放 / IM 语音消息</pre>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="skills">
+<h2><span class="n">10</span>Skills 系统（客户端本地）</h2>
+
+<div class="tw">
+<table>
+  <thead><tr><th>功能</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><strong>本地存储</strong></td><td><code>~/.ua/skills/</code> 目录，每个 Skill 一个 <code>SKILL.yaml</code></td></tr>
+    <tr><td><strong>热重载</strong></td><td>客户端监听目录变更，自动重新加载</td></tr>
+    <tr><td><strong>触发方式</strong></td><td>Slash 命令 / Hook 事件 / Cron / IM 关键词</td></tr>
+    <tr><td><strong>权限沙箱</strong></td><td>Skill 声明权限 → Agent <code>allowedTools</code> 受限</td></tr>
+    <tr><td><strong>内置</strong></td><td>git-commit / code-review / security-scan / unit-test / explain</td></tr>
+    <tr><td><strong>市场</strong></td><td>从 GitHub 仓库浏览/安装社区 Skills</td></tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="sync">
+<h2><span class="n">11</span>客户端 ↔ Server 状态同步</h2>
+
+<h3>11.1 WebSocket 协议</h3>
+<pre><span class="cm">// 客户端 → Server</span>
+{ action: <span class="s">"register"</span>,      payload: { name, os, agents[], ims[], version } }
+{ action: <span class="s">"heartbeat"</span>,     payload: { status, active_sessions, cpu, mem } }
+{ action: <span class="s">"session_start"</span>, payload: { session_id, agent_type, project_path } }
+{ action: <span class="s">"session_end"</span>,   payload: { session_id, token_usage, cost, duration } }
+{ action: <span class="s">"usage_report"</span>,  payload: { period, input_tokens, output_tokens, cost } }
+{ action: <span class="s">"memory_recall"</span>, payload: { prompt_text, top_k } }
+{ action: <span class="s">"memory_write"</span>,  payload: { entries: [{ type, title, content }] } }
+{ action: <span class="s">"memory_search"</span>, payload: { query } }
+{ action: <span class="s">"memory_update"</span>, payload: { id, content } }
+{ action: <span class="s">"memory_delete"</span>, payload: { id } }
+{ action: <span class="s">"audit_event"</span>,   payload: { event_type, detail } }
+
+<span class="cm">// Server → 客户端</span>
+{ action: <span class="s">"registered"</span>,     payload: { client_id, quota } }
+{ action: <span class="s">"memory_results"</span>,  payload: { memories: [{ id, type, title, content }] } }
+{ action: <span class="s">"quota_warning"</span>,   payload: { remaining_tokens, message } }
+{ action: <span class="s">"quota_exceeded"</span>,  payload: { message } }
+{ action: <span class="s">"admin_command"</span>,   payload: { command: "stop_agent"|"restart"|"freeze" } }
+{ action: <span class="s">"config_update"</span>,   payload: { key, value } }  <span class="cm">// 管理员推送配置变更</span></pre>
+
+<h3>11.2 离线能力</h3>
+<div class="hl">
+<ul>
+  <li><strong>客户端可离线工作</strong> — Agent spawn、IM 连接、Skills 执行都在本地，不依赖 Server</li>
+  <li><strong>离线时</strong> — Memory 召回不可用（降级为无记忆模式），用量数据本地缓存</li>
+  <li><strong>重连后</strong> — 自动上传缓存的用量数据 + 待写入的记忆条目，Server 补录审计日志</li>
+</ul>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="data">
+<h2><span class="n">12</span>数据层</h2>
+
+<div class="rg">
+  <div class="rb" style="border-left:3px solid var(--cyan)">
+    <h4 style="color:var(--cyan)">客户端本地</h4>
+<pre style="margin:0">~/.ua/
+├── config.toml          <span class="cm"># Agent + IM + Voice 配置</span>
+├── client.db            <span class="cm"># 本地 SQLite（会话历史缓存）</span>
+├── skills/              <span class="cm"># Skills YAML</span>
+├── voice-cache/         <span class="cm"># TTS 音频缓存</span>
+├── logs/                <span class="cm"># Agent 输出日志</span>
+└── hook-scripts/        <span class="cm"># Hook 转发脚本</span></pre>
+  </div>
+  <div class="rb" style="border-left:3px solid var(--purple)">
+    <h4 style="color:var(--purple)">Server 端</h4>
+<pre style="margin:0">/data/ua/
+├── config.toml          <span class="cm"># Server 配置</span>
+├── server.db            <span class="cm"># 主库</span>
+└── web/                 <span class="cm"># 前端静态资源</span>
+
+<span class="cm"># SQLite 表</span>
+<span class="k">users</span>    (id, username, hash, role)
+<span class="k">clients</span>  (id, user_id, name, status,
+          last_heartbeat, agents_json, os)
+<span class="k">memories</span> (id, user_id, type, title,
+          content, embedding, relevance,
+          access_count, source, created_at)
+<span class="k">usage</span>    (id, client_id, period,
+          input_tokens, output_tokens, cost)
+<span class="k">audit</span>    (id, user_id, client_id,
+          action, detail, timestamp)
+<span class="k">quotas</span>   (user_id, daily, monthly, max_mem)</pre>
+  </div>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="crates">
+<h2><span class="n">13</span>Rust Crate 拆分</h2>
+
+<pre><span class="cm">// Cargo workspace</span>
+unified-agent/
+├── Cargo.toml                         <span class="cm"># workspace</span>
+├── crates/
+│   ├── <span class="k">ua-core</span>/                      <span class="cm"># 共享类型: Agent Trait, Event, Memory 模型, 协议消息</span>
+│   │
+│   │  <span class="cm">── 客户端 crates ──</span>
+│   ├── <span class="k">ua-agent-claude</span>/              <span class="cm"># Claude: spawn + fd3 + Hook (Happy 模式)</span>
+│   ├── <span class="k">ua-agent-codex</span>/               <span class="cm"># Codex: JSON-RPC stdio</span>
+│   ├── <span class="k">ua-agent-gemini</span>/              <span class="cm"># Gemini: CLI stream</span>
+│   ├── <span class="k">ua-agent-openclaw</span>/            <span class="cm"># OpenClaw: WebSocket</span>
+│   ├── <span class="k">ua-voice</span>/                     <span class="cm"># STT/TTS 多提供商</span>
+│   ├── <span class="k">ua-skills</span>/                    <span class="cm"># Skill YAML 解析 + 热重载 + Cron</span>
+│   ├── <span class="k">ua-im-wechat</span>/                <span class="cm"># 微信 iLink 适配器</span>
+│   ├── <span class="k">ua-im-feishu</span>/                <span class="cm"># 飞书 Lark 适配器</span>
+│   │
+│   │  <span class="cm">── Server crates ──</span>
+│   ├── <span class="k">ua-server</span>/                    <span class="cm"># Axum: Gateway, Registry, Quota, Audit</span>
+│   └── <span class="k">ua-memory</span>/                    <span class="cm"># Memory Engine: 存储 + 向量检索 + 衰减</span>
+│
+├── src-tauri/                         <span class="cm"># Tauri 桌面客户端</span>
+│   ├── Cargo.toml                    <span class="cm"># 依赖 ua-agent-* + ua-voice + ua-skills + ua-im-*</span>
+│   └── src/
+│       ├── main.rs                   <span class="cm"># Tauri 入口</span>
+│       ├── agent_supervisor.rs       <span class="cm"># 进程管理 + 三通道汇聚</span>
+│       ├── server_client.rs          <span class="cm"># WebSocket 连接 Server</span>
+│       └── commands.rs               <span class="cm"># Tauri IPC commands</span>
+│
+├── web/                               <span class="cm"># 共享 React 前端</span>
+│   ├── src/
+│   │   ├── desktop/                  <span class="cm"># 桌面 GUI 页面（对话、配置、Memory）</span>
+│   │   ├── admin/                    <span class="cm"># 管理员 Web 页面</span>
+│   │   ├── user/                     <span class="cm"># 用户 Web 页面</span>
+│   │   └── shared/                   <span class="cm"># 共享组件</span>
+│   └── package.json
+│
+└── server-bin/                        <span class="cm"># Server 独立二进制</span>
+    └── main.rs                       <span class="cm"># 启动 ua-server + 内嵌 admin/user Web</span></pre>
+
+<div class="hl">
+<h4>编译产物</h4>
+<div class="tw">
+<table>
+  <thead><tr><th>产物</th><th>内容</th><th>部署</th></tr></thead>
+  <tbody>
+    <tr><td><code>unified-agent.exe/.dmg/.AppImage</code></td><td>Tauri 桌面客户端（含 Agent 适配器 + IM + Voice + Skills）</td><td>用户桌面安装</td></tr>
+    <tr><td><code>ua-server</code></td><td>Server（含管理员/用户 Web UI，rust-embed 嵌入）</td><td>服务器 / Docker 部署</td></tr>
+  </tbody>
+</table>
+</div>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="roadmap">
+<h2><span class="n">14</span>实施路线</h2>
+
+<div class="tw">
+<table>
+  <thead><tr><th>阶段</th><th>里程碑</th><th>交付</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="tg tg-b">P1</span><br><strong>核心可用</strong></td>
+      <td>客户端 + Server 跑通</td>
+      <td>
+        <code>ua-core</code> + <code>ua-agent-claude</code>: Happy 三层模式<br>
+        <code>src-tauri</code>: 桌面 GUI（对话 + Agent 配置）<br>
+        <code>ua-server</code>: 注册 + 心跳 + 用量统计<br>
+        管理员 Web: 客户端列表 + 仪表盘
+      </td>
+    </tr>
+    <tr>
+      <td><span class="tg tg-g">P2</span><br><strong>Memory 系统</strong></td>
+      <td>记忆可用</td>
+      <td>
+        <code>ua-memory</code>: 存储 + 向量检索 + 衰减<br>
+        客户端: 对话前召回 + 对话后提取<br>
+        Memory Web UI: 搜索 + CRUD<br>
+        桌面 GUI: Memory 浏览/编辑
+      </td>
+    </tr>
+    <tr>
+      <td><span class="tg tg-p">P3</span><br><strong>多 Agent + IM</strong></td>
+      <td>全 Agent + 微信飞书</td>
+      <td>
+        <code>ua-agent-codex</code> + <code>ua-agent-gemini</code> + <code>ua-agent-openclaw</code><br>
+        <code>ua-im-wechat</code> + <code>ua-im-feishu</code><br>
+        桌面 GUI: IM 配置页面<br>
+        用户 Web: Memory + 用量面板
+      </td>
+    </tr>
+    <tr>
+      <td><span class="tg tg-o">P4</span><br><strong>语音 + Skills + 打磨</strong></td>
+      <td>完整平台</td>
+      <td>
+        <code>ua-voice</code>: Edge TTS + 豆包 ASR + Whisper<br>
+        <code>ua-skills</code>: YAML 热重载 + Cron + 市场<br>
+        审计日志 + 配额告警 + 离线恢复<br>
+        自动更新 + Docker 镜像
+      </td>
+    </tr>
+  </tbody>
+</table>
+</div>
+</section>
+
+</div>
+
+<div class="footer">
+  Unified AI Agent Platform — Architecture Design v3.0 — 2026-04-06<br>
+  Client: Tauri (spawn Agent + IM + Voice + Skills) &bull; Server: Memory + 管控 + 统计
+</div>
+
+</body>
+</html>

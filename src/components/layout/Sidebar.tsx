@@ -11,7 +11,8 @@ import {
   ChevronLeft,
   ChevronRight,
   HelpCircle,
-  Sparkles
+  Sparkles,
+  User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { View } from '@/types/navigation';
@@ -23,9 +24,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Popover } from '@/components/ui/popover';
 import { UnifiedEngineStatus } from '@/components/UnifiedEngineStatus';
 import { UpdateBadge } from '@/components/common/UpdateBadge';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
+import { useAuth } from '@/contexts/AuthContext';
+import { LoginDialog } from '@/components/LoginDialog';
 
 interface SidebarProps {
   currentView: View;
@@ -52,6 +56,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUpdateClick
 }) => {
   const { t } = useTranslation();
+  const { user, isAuthenticated, logout } = useAuth();
+  const [loginOpen, setLoginOpen] = useState(false);
 
   // 展开/收起状态，从 localStorage 读取
   const [isExpanded, setIsExpanded] = useState(() => {
@@ -80,10 +86,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { view: 'usage-dashboard', icon: BarChart2, label: t('sidebar.usageStats') },
     { view: 'mcp', icon: Layers, label: t('sidebar.mcpTools') },
     { view: 'claude-extensions', icon: Package, label: t('sidebar.extensions') },
-  ];
-
-  const bottomNavItems: NavItem[] = [
-    { view: 'settings', icon: Settings, label: t('navigation.settings') },
   ];
 
   const NavButton = ({ item }: { item: NavItem }) => {
@@ -213,38 +215,118 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* 设置和展开/收起按钮 */}
+        {/* 用户信息 / 登录按钮 + 展开/收起 */}
         <div className={cn(
-          "flex items-center gap-1 pt-2 border-t border-[var(--glass-border)]",
-          isExpanded ? "justify-between px-2" : "flex-col"
+          "flex flex-col gap-1 pt-2 border-t border-[var(--glass-border)]",
+          isExpanded ? "px-2" : "items-center"
         )}>
-          {bottomNavItems.map((item) => (
-            <NavButton key={item.view} item={item} />
-          ))}
-
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
+          <Popover
+            align="start"
+            side="top"
+            className="w-56 p-1"
+            trigger={
+              isExpanded ? (
                 <Button
                   variant="ghost"
-                  size="icon"
-                  onClick={() => setIsExpanded(!isExpanded)}
-                  className="w-8 h-8 text-muted-foreground hover:text-foreground"
-                  aria-label={isExpanded ? t('sidebar.collapseSidebar') : t('sidebar.expandSidebar')}
+                  className="w-full justify-start gap-2 px-3 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 >
-                  {isExpanded ? (
-                    <ChevronLeft className="w-4 h-4" />
-                  ) : (
-                    <ChevronRight className="w-4 h-4" />
-                  )}
+                  <User className="w-5 h-5" strokeWidth={2} />
+                  <span className="ml-1 text-sm font-medium truncate">
+                    {isAuthenticated ? (user?.display_name || user?.username) : t('sidebar.login', 'Sign In')}
+                  </span>
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                <p>{isExpanded ? t('sidebar.collapseSidebar') : t('sidebar.expandSidebar')}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+              ) : (
+                <TooltipProvider delayDuration={0}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        className="w-10 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                      >
+                        <User className="w-5 h-5" strokeWidth={2} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>{isAuthenticated ? (user?.display_name || user?.username) : t('sidebar.login', 'Sign In')}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )
+            }
+            content={
+              <div className="flex flex-col gap-0.5">
+                {isAuthenticated ? (
+                  <>
+                    <div className="px-3 py-2 text-sm text-muted-foreground truncate">
+                      {user?.display_name || user?.username}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-2 h-9"
+                      onClick={() => onNavigate('settings')}
+                    >
+                      <Settings className="w-4 h-4" />
+                      {t('navigation.settings')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-2 h-9 text-destructive hover:text-destructive"
+                      onClick={logout}
+                    >
+                      {t('sidebar.logout', 'Sign Out')}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-2 h-9"
+                      onClick={() => setLoginOpen(true)}
+                    >
+                      <User className="w-4 h-4" />
+                      {t('sidebar.login', 'Sign In')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-2 h-9"
+                      onClick={() => onNavigate('settings')}
+                    >
+                      <Settings className="w-4 h-4" />
+                      {t('navigation.settings')}
+                    </Button>
+                  </>
+                )}
+              </div>
+            }
+          />
+          <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+
+          <div className={cn("flex", isExpanded ? "justify-end" : "justify-center")}>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="w-8 h-8 text-muted-foreground hover:text-foreground"
+                    aria-label={isExpanded ? t('sidebar.collapseSidebar') : t('sidebar.expandSidebar')}
+                  >
+                    {isExpanded ? (
+                      <ChevronLeft className="w-4 h-4" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p>{isExpanded ? t('sidebar.collapseSidebar') : t('sidebar.expandSidebar')}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         </div>
+
       </div>
     </div>
   );

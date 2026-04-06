@@ -682,6 +682,33 @@ export interface FrogclawUserData {
   group: string;
 }
 
+export interface FrogclawToken {
+  id: number;
+  key: string;
+  name: string;
+  status: number;
+  remain_quota: number;
+  unlimited_quota: boolean;
+}
+
+export interface FrogclawSystemProvider {
+  id: number;
+  name: string;
+  provider_key: string;
+  api_mode: string;
+  needs_v1_suffix: boolean;
+  base_url: string;
+  default_model: string | null;
+  use_site_token: boolean;
+  token_group: string;
+}
+
+export interface FrogclawLoginSession {
+  user: FrogclawUserData;
+  tokens: FrogclawToken[];
+  system_providers: FrogclawSystemProvider[];
+}
+
 /**
  * API client for interacting with the Rust backend
  */
@@ -4247,6 +4274,10 @@ export const api = {
 
   async loginToFrogclaw(username: string, password: string): Promise<FrogclawUserData> {
     return await invoke<FrogclawUserData>("login_to_frogclaw", { username, password });
+  },
+
+  async fetchFrogclawProviders(username: string, password: string): Promise<FrogclawLoginSession> {
+    return await invoke<FrogclawLoginSession>("fetch_frogclaw_providers", { username, password });
   },
 
 };

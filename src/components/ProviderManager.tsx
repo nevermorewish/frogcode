@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from '@/contexts/AuthContext';
 import {
   Settings2,
   Globe,
@@ -16,11 +17,9 @@ import {
   Plus,
   Edit,
   Trash,
-  DollarSign,
-  Infinity,
-  Calendar
+  CloudDownload,
 } from 'lucide-react';
-import { api, type ProviderConfig, type CurrentProviderConfig, type ApiKeyUsage } from '@/lib/api';
+import { api, type ProviderConfig, type CurrentProviderConfig } from '@/lib/api';
 import { Toast } from '@/components/ui/toast';
 import ProviderForm from './ProviderForm';
 import { useTranslation } from "@/hooks/useTranslation";
@@ -48,17 +47,27 @@ export default function ProviderManager({ onBack }: ProviderManagerProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<ProviderConfig | null>(null);
 
-  // Usage query state
-  const [queryingUsage, setQueryingUsage] = useState<string | null>(null);
-  const [usageDialogOpen, setUsageDialogOpen] = useState(false);
-  const [usageData, setUsageData] = useState<ApiKeyUsage | null>(null);
-  const [usageProvider, setUsageProvider] = useState<ProviderConfig | null>(null);
-  // 用量缓存：key 是 provider id，value 是用量数据
-  const [usageCache, setUsageCache] = useState<Record<string, ApiKeyUsage>>({});
+  const [syncing, setSyncing] = useState(false);
+  const { isAuthenticated, tokens, selectedTokenId, selectToken } = useAuth();
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleSyncFromFrogclaw = async () => {
+    const token = tokens.find(t => t.id === selectedTokenId) || tokens[0];
+    if (!token) return;
+    setSyncing(true);
+    try {
+      await selectToken(token.id);
+      await loadData();
+      setToastMessage({ message: t('provider.syncSuccess', 'Synced from Frogclaw'), type: 'success' });
+    } catch (err) {
+      setToastMessage({ message: String(err), type: 'error' });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -116,41 +125,6 @@ export default function ProviderManager({ onBack }: ProviderManagerProps) {
     } finally {
       setTesting(null);
     }
-  };
-
-  const queryUsage = async (config: ProviderConfig, showDialog: boolean = true) => {
-    // 需要 API Key 才能查询用量
-    const apiKey = config.api_key || config.auth_token;
-    if (!apiKey) {
-      setToastMessage({ message: t('provider.noApiKeyForUsage'), type: 'error' });
-      return;
-    }
-
-    try {
-      setQueryingUsage(config.id);
-      const usage = await api.queryProviderUsage(config.base_url, apiKey);
-      // 缓存用量数据
-      setUsageCache(prev => ({ ...prev, [config.id]: usage }));
-      if (showDialog) {
-        setUsageData(usage);
-        setUsageProvider(config);
-        setUsageDialogOpen(true);
-      }
-    } catch (error) {
-      console.error('Failed to query usage:', error);
-      setToastMessage({ message: t('provider.queryUsageFailed', { error: String(error) }), type: 'error' });
-    } finally {
-      setQueryingUsage(null);
-    }
-  };
-
-  const formatCurrency = (value: number): string => {
-    return `$${value.toFixed(2)}`;
-  };
-
-  const formatDate = (timestamp: number): string => {
-    if (timestamp === 0) return t('provider.neverExpires');
-    return new Date(timestamp * 1000).toLocaleString('zh-CN');
   };
 
   const handleAddProvider = () => {
@@ -306,6 +280,18 @@ export default function ProviderManager({ onBack }: ProviderManagerProps) {
         </div>
 
         <div className="flex items-center gap-2">
+          {isAuthenticated && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSyncFromFrogclaw}
+              disabled={syncing}
+              className="text-xs"
+            >
+              <CloudDownload className={`h-3 w-3 mr-1 ${syncing ? 'animate-pulse' : ''}`} aria-hidden="true" />
+              {syncing ? t('provider.syncing', 'Syncing...') : t('provider.syncFrogclaw', 'Sync')}
+            </Button>
+          )}
           <Button
             variant="default"
             size="sm"
@@ -405,45 +391,7 @@ export default function ProviderManager({ onBack }: ProviderManagerProps) {
                 </div>
 
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  {/* 用量显示区域 */}
-                  {usageCache[config.id] && (
-                    <div className="text-right text-xs space-y-0.5 border-r pr-3 mr-1">
-                      <div className="text-muted-foreground">
-                        {t('provider.used')} <span className="font-medium text-foreground">{formatCurrency(usageCache[config.id].used_balance)}</span>
-                      </div>
-                      <div className="text-muted-foreground">
-                        {usageCache[config.id].is_unlimited ? (
-                          <span className="text-green-600 font-medium flex items-center justify-end gap-1">
-                            {t('provider.remaining')} <Infinity className="h-3 w-3" /> {t('provider.unlimited')}
-                          </span>
-                        ) : (
-                          <>
-                            {t('provider.remaining')} <span className={`font-medium ${usageCache[config.id].remaining_balance > 10 ? 'text-green-600' : 'text-red-600'}`}>
-                              {formatCurrency(usageCache[config.id].remaining_balance)}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
                   <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => queryUsage(config)}
-                    disabled={queryingUsage === config.id}
-                    className="text-xs"
-                    aria-label={t('provider.usageQuery')}
-                    title={t('provider.usageQuery')}
-                  >
-                    {queryingUsage === config.id ? (
-                      <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <DollarSign className="h-3 w-3" aria-hidden="true" />
-                    )}
-                  </Button>
-
                   <Button
                     variant="outline"
                     size="sm"
@@ -620,88 +568,6 @@ export default function ProviderManager({ onBack }: ProviderManagerProps) {
             onSubmit={handleFormSubmit}
             onCancel={handleFormCancel}
           />
-        </DialogContent>
-      </Dialog>
-
-      {/* Usage Query Result Dialog */}
-      <Dialog open={usageDialogOpen} onOpenChange={setUsageDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <DollarSign className="h-5 w-5" />
-              {t('provider.usageQuery')}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            {usageProvider && (
-              <div className="text-sm text-muted-foreground mb-4">
-                {t('provider.providerLabel')} <span className="font-medium text-foreground">{usageProvider.name}</span>
-              </div>
-            )}
-            {usageData && (
-              <div className="space-y-3">
-                <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm text-muted-foreground">{t('provider.totalBalance')}</span>
-                  <span className={`font-semibold ${usageData.is_unlimited ? 'text-green-600' : ''}`}>
-                    {usageData.is_unlimited ? (
-                      <span className="flex items-center gap-1">
-                        <Infinity className="h-4 w-4" />
-                        {t('provider.unlimited')}
-                      </span>
-                    ) : (
-                      formatCurrency(usageData.total_balance)
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm text-muted-foreground">{t('provider.usedBalance')}</span>
-                  <span className="font-semibold">
-                    {formatCurrency(usageData.used_balance)}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm text-muted-foreground">{t('provider.remainingBalance')}</span>
-                  <span className={`font-semibold ${
-                    usageData.is_unlimited
-                      ? 'text-green-600'
-                      : usageData.remaining_balance > 10
-                        ? 'text-green-600'
-                        : 'text-red-600'
-                  }`}>
-                    {usageData.is_unlimited ? (
-                      <span className="flex items-center gap-1">
-                        <Infinity className="h-4 w-4" />
-                        {t('provider.noLimit')}
-                      </span>
-                    ) : (
-                      formatCurrency(usageData.remaining_balance)
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="text-sm text-muted-foreground flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    {t('provider.validUntil')}
-                  </span>
-                  <span className="font-semibold">
-                    {formatDate(usageData.access_until)}
-                  </span>
-                </div>
-
-                <div className="text-xs text-muted-foreground text-center pt-2 border-t">
-                  {t('provider.queryPeriod', { start: usageData.query_start_date, end: usageData.query_end_date })}
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="flex justify-end">
-            <Button variant="outline" onClick={() => setUsageDialogOpen(false)}>
-              {t('buttons.close')}
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
 

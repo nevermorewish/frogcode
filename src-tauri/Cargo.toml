@@ -42,7 +42,7 @@ lazy_static = "1.4"
 md5 = "0.7"
 glob = "0.3"
 base64 = "0.22"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "cookies"] }
 futures = "0.3"
 async-trait = "0.1"
 tempfile = "3"

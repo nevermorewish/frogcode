@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from '@/contexts/AuthContext';
 import {
   Settings2,
   Globe,
@@ -18,6 +19,7 @@ import {
   Trash,
   Sparkles,
   ExternalLink,
+  CloudDownload,
 } from 'lucide-react';
 import { api, type GeminiProviderConfig, type CurrentGeminiProviderConfig } from '@/lib/api';
 import { Toast } from '@/components/ui/toast';
@@ -53,10 +55,27 @@ export default function GeminiProviderManager({ onBack }: GeminiProviderManagerP
   // Delete confirmation dialog state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<GeminiProviderConfig | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const { isAuthenticated, tokens, selectedTokenId, selectToken } = useAuth();
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleSyncFromFrogclaw = async () => {
+    const token = tokens.find(t => t.id === selectedTokenId) || tokens[0];
+    if (!token) return;
+    setSyncing(true);
+    try {
+      await selectToken(token.id);
+      await loadData();
+      setToastMessage({ message: t('provider.syncSuccess', 'Synced from Frogclaw'), type: 'success' });
+    } catch (err) {
+      setToastMessage({ message: String(err), type: 'error' });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -309,6 +328,18 @@ export default function GeminiProviderManager({ onBack }: GeminiProviderManagerP
         </div>
 
         <div className="flex items-center gap-2">
+          {isAuthenticated && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSyncFromFrogclaw}
+              disabled={syncing}
+              className="text-xs"
+            >
+              <CloudDownload className={`h-3 w-3 mr-1 ${syncing ? 'animate-pulse' : ''}`} aria-hidden="true" />
+              {syncing ? t('provider.syncing', 'Syncing...') : t('provider.syncFrogclaw', 'Sync')}
+            </Button>
+          )}
           <Button
             variant="default"
             size="sm"

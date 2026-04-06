@@ -10,9 +10,10 @@ import {
   Eye,
   EyeOff,
   Info,
-  Loader2
+  Loader2,
 } from 'lucide-react';
 import { type ProviderConfig } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { Toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { useTranslation } from "@/hooks/useTranslation";
@@ -29,6 +30,7 @@ export default function ProviderForm({
   onCancel
 }: ProviderFormProps) {
   const { t } = useTranslation();
+  const { tokens } = useAuth();
   const [formData, setFormData] = useState<Omit<ProviderConfig, 'id'>>({
     name: initialData?.name || '',
     description: initialData?.description || '',
@@ -201,7 +203,25 @@ export default function ProviderForm({
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="api_key">API Key</Label>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="api_key">API Key</Label>
+                    {tokens.length > 0 && (
+                      <select
+                        className="h-6 px-1.5 pr-5 rounded border border-input bg-background text-xs cursor-pointer appearance-none relative"
+                        defaultValue=""
+                        onChange={(e) => {
+                          handleInputChange('api_key', `sk-${e.target.value}`);
+                        }}
+                      >
+                        <option value="" disabled>{t('selectToken', 'Select Token')}</option>
+                        {tokens.map((token) => (
+                          <option key={token.id} value={token.key}>
+                            {token.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                   <div className="relative">
                     <Input
                       id="api_key"

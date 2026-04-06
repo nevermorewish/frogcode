@@ -23,6 +23,7 @@ import {
   Settings2,
 } from 'lucide-react';
 import { type CodexProviderConfig } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { Toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -50,6 +51,7 @@ export default function CodexProviderForm({
   onCancel
 }: CodexProviderFormProps) {
   const { t } = useTranslation();
+  const { tokens } = useAuth();
   // 预设选择
   const [selectedPreset, setSelectedPreset] = useState<string>('');
 
@@ -326,7 +328,25 @@ export default function CodexProviderForm({
 
             {/* API Key */}
             <div className="space-y-2">
-              <Label htmlFor="apiKey">{t('provider.apiKey')} *</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="apiKey">{t('provider.apiKey')} *</Label>
+                {tokens.length > 0 && (
+                  <select
+                    className="h-6 px-1.5 pr-5 rounded border border-input bg-background text-xs cursor-pointer appearance-none"
+                    defaultValue=""
+                    onChange={(e) => {
+                      handleApiKeyChange(`sk-${e.target.value}`);
+                    }}
+                  >
+                    <option value="" disabled>{t('selectToken', 'Select Token')}</option>
+                    {tokens.map((token) => (
+                      <option key={token.id} value={token.key}>
+                        {token.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
               <div className="relative">
                 <Input
                   id="apiKey"

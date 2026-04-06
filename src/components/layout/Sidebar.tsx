@@ -56,8 +56,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUpdateClick
 }) => {
   const { t } = useTranslation();
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated, logout, tokens, selectedTokenId, selectToken } = useAuth();
   const [loginOpen, setLoginOpen] = useState(false);
+  const [switchingToken, setSwitchingToken] = useState(false);
 
   // 展开/收起状态，从 localStorage 读取
   const [isExpanded, setIsExpanded] = useState(() => {
@@ -260,6 +261,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="px-3 py-2 text-sm text-muted-foreground truncate">
                       {user?.display_name || user?.username}
                     </div>
+                    {tokens.length > 1 && (
+                      <div className="px-2 py-1">
+                        <div className="text-xs text-muted-foreground mb-1 px-1">{t('apiToken', 'API Token')}</div>
+                        <select
+                          className="w-full text-xs px-2 py-1.5 rounded-md border border-border bg-background text-foreground cursor-pointer"
+                          value={selectedTokenId ?? ''}
+                          disabled={switchingToken}
+                          onChange={async (e) => {
+                            const id = Number(e.target.value);
+                            if (id) {
+                              setSwitchingToken(true);
+                              try { await selectToken(id); } finally { setSwitchingToken(false); }
+                            }
+                          }}
+                        >
+                          {tokens.map((token) => (
+                            <option key={token.id} value={token.id}>
+                              {token.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <Button
                       variant="ghost"
                       className="w-full justify-start gap-2 h-9"

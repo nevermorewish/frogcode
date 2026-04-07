@@ -483,6 +483,11 @@ function createEventDispatcher(): lark.EventDispatcher {
 
         // ─── Slash commands ───
         const lower = text.toLowerCase();
+        if (lower === '/new' || lower === '/reset') {
+          await sendText(chatId, '✅ 会话已重置，下次消息将开始新对话。');
+          log('info', `Session reset for chat ${chatId}`);
+          return;
+        }
         if (lower === '/stop') {
           // Tell Rust to cancel (if it supports it)
           bus.emit('event', { type: 'cancel', chatId });
@@ -733,12 +738,17 @@ const server = http.createServer(async (req, res) => {
         const existingMsgId = chatCardMap.get(chatId);
         let messageId: string | undefined;
 
-        if ((action === 'send') || (action !== 'update' && !existingMsgId)) {
+        if (action === 'send') {
+          // Explicit send — create a new card
           messageId = await sendCard(chatId, content, replyToMessageId);
           if (messageId) chatCardMap.set(chatId, messageId);
-        } else {
+        } else if (existingMsgId) {
+          // Update existing card
           messageId = existingMsgId;
-          if (messageId) await updateCard(messageId, content);
+          await updateCard(messageId, content);
+        } else {
+          // No existing card and not a "send" — skip (avoids duplicate card creation)
+          return sendJson(res, 200, { ok: true, messageId: null });
         }
 
         // On final state, clear the map + remove typing indicator

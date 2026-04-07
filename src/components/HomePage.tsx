@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useImBridgeStatus } from '@/hooks/useImBridgeStatus';
+import { FeishuSetupDialog } from '@/components/im/FeishuSetupDialog';
 import {
   CheckCircle2,
   XCircle,
@@ -524,10 +526,18 @@ const IMChannelCard: React.FC<{
   onToast: (message: string, type: 'success' | 'error' | 'info') => void;
 }> = ({ onToast }) => {
   const { t } = useTranslation();
+  const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
+  const bridge = useImBridgeStatus();
 
-  const handleConfigure = (name: string) => {
-    onToast(`${name} ${t('home.imChannel.comingSoon', '配置功能即将推出')}`, 'info');
-  };
+  // Derive Feishu card props from bridge status
+  const feishuConnected = bridge.status === 'running' && bridge.feishuStatus === 'running';
+  const feishuColor = feishuConnected
+    ? 'bg-green-500'
+    : bridge.status === 'running' && bridge.feishuStatus === 'starting'
+      ? 'bg-amber-400'
+      : bridge.status === 'running' && bridge.feishuStatus === 'error'
+        ? 'bg-red-500'
+        : 'bg-muted-foreground/40';
 
   return (
     <FeatureCard
@@ -543,9 +553,9 @@ const IMChannelCard: React.FC<{
             'home.imChannel.feishuDesc',
             '通过飞书机器人接收通知，支持消息卡片和交互按钮'
           )}
-          status="disconnected"
-          statusColor="bg-muted-foreground/40"
-          onConfigure={() => handleConfigure('飞书')}
+          status={feishuConnected ? 'connected' : 'disconnected'}
+          statusColor={feishuColor}
+          onConfigure={() => setFeishuDialogOpen(true)}
         />
         <ChannelCard
           icon={<WechatIcon className="h-5 w-5" />}
@@ -556,7 +566,12 @@ const IMChannelCard: React.FC<{
           )}
           status="disconnected"
           statusColor="bg-muted-foreground/40"
-          onConfigure={() => handleConfigure('微信')}
+          onConfigure={() =>
+            onToast(
+              `${t('home.imChannel.wechat', '微信')} ${t('home.imChannel.comingSoon', '配置功能即将推出')}`,
+              'info'
+            )
+          }
         />
       </div>
 
@@ -569,6 +584,14 @@ const IMChannelCard: React.FC<{
           )}
         </span>
       </div>
+
+      <FeishuSetupDialog
+        open={feishuDialogOpen}
+        onOpenChange={setFeishuDialogOpen}
+        onConnected={() =>
+          onToast(t('home.imChannel.feishu.connected', '飞书机器人已连接'), 'success')
+        }
+      />
     </FeatureCard>
   );
 };

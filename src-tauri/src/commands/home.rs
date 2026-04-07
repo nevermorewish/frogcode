@@ -105,6 +105,13 @@ fn ensure_windows_path() {
             }
         }
 
+        // npm global prefix (dynamic, covers non-standard npm setups)
+        if let Some(npm_dir) = npm_global_prefix() {
+            if !current.to_lowercase().contains(&npm_dir.to_lowercase()) && std::path::Path::new(&npm_dir).exists() {
+                extra.push(npm_dir);
+            }
+        }
+
         // nvm-windows symlink target (ProgramFiles\nodejs is created by nvm use)
         // Also check ProgramData\nvm (system-wide nvm install)
         for p in &["C:\\ProgramData\\nvm", "C:\\Program Files\\nodejs"] {
@@ -121,6 +128,31 @@ fn ensure_windows_path() {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn npm_global_prefix() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let mut c = Command::new("cmd");
+    c.args(&["/C", "npm", "prefix", "-g"]);
+    c.creation_flags(CREATE_NO_WINDOW);
+    c.output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn lookup_in_npm_prefix(cmd: &str) -> Option<String> {
+    let prefix = npm_global_prefix()?;
+    for ext in &[".cmd", ".ps1", ".exe", ""] {
+        let p = format!("{}\\{}{}", prefix, cmd, ext);
+        if std::path::Path::new(&p).exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 fn run_lookup(cmd: &str) -> Option<String> {
     let lookup = if cfg!(target_os = "windows") { "where" } else { "which" };
     let mut c = Command::new(lookup);
@@ -130,7 +162,7 @@ fn run_lookup(cmd: &str) -> Option<String> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(CREATE_NO_WINDOW);
     }
-    c.output()
+    let found = c.output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| {
@@ -141,7 +173,20 @@ fn run_lookup(cmd: &str) -> Option<String> {
                 .trim()
                 .to_string()
         })
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+
+    #[cfg(target_os = "windows")]
+    {
+        if found.is_some() {
+            return found;
+        }
+        // Fallback: check npm global prefix directly (for npm-installed CLIs)
+        return lookup_in_npm_prefix(cmd);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        found
+    }
 }
 
 fn run_version(cmd: &str, args: &[&str]) -> Option<String> {
@@ -222,7 +267,7 @@ fn get_install_command(tool_id: &str) -> Result<(String, Vec<String>, bool), Str
                 let ps_script = format!(
                     "$ErrorActionPreference='Stop'; \
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
-$nodeVersion='20.18.1'; \
+$nodeVersion='25.9.0'; \
 $arch='{}'; \
 $url=\"https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-$arch.msi\"; \
 $msi=Join-Path $env:TEMP \"node-v$nodeVersion-$arch.msi\"; \
@@ -266,24 +311,36 @@ Write-Host 'Node.js installed successfully'",
                 false,
             )),
             "git" => {
-                // Fallback: download Git for Windows latest installer and run silently.
+                // Fallback: download Git for Windows installer from China mirrors (github.com is unreliable in CN).
+                // Try npmmirror first, then tsinghua, then github as last resort.
                 let arch = if cfg!(target_arch = "x86_64") { "64-bit" } else { "32-bit" };
+                let ver = "2.47.1";
                 let ps_script = format!(
                     "$ErrorActionPreference='Stop'; \
                      [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
-                     $arch='{}'; \
-                     $url=\"https://github.com/git-for-windows/git/releases/latest/download/Git-2.47.1-$arch.exe\"; \
+                     $arch='{arch}'; $ver='{ver}'; \
+                     $urls=@( \
+                       \"https://npmmirror.com/mirrors/git-for-windows/v$ver.windows.1/Git-$ver-$arch.exe\", \
+                       \"https://mirrors.tuna.tsinghua.edu.cn/github-release/git-for-windows/git/Git%20for%20Windows%20$ver/Git-$ver-$arch.exe\", \
+                       \"https://github.com/git-for-windows/git/releases/download/v$ver.windows.1/Git-$ver-$arch.exe\" \
+                     ); \
                      $exe=Join-Path $env:TEMP 'git-installer.exe'; \
-                     Write-Host \"Downloading Git ($arch) from $url\"; \
-                     Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing; \
+                     $ok=$false; $lastErr=''; \
+                     foreach ($url in $urls) {{ \
+                       try {{ \
+                         Write-Host \"Trying $url\"; \
+                         Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -TimeoutSec 60; \
+                         if ((Get-Item $exe).Length -gt 1000000) {{ $ok=$true; Write-Host \"Downloaded from $url\"; break }} \
+                       }} catch {{ $lastErr=$_.Exception.Message; Write-Host \"Failed: $lastErr\" }} \
+                     }}; \
+                     if (-not $ok) {{ throw \"All mirrors failed. Last error: $lastErr\" }}; \
                      Write-Host 'Installing Git (silent)...'; \
                      $p=Start-Process $exe -ArgumentList '/VERYSILENT','/NORESTART','/NOCANCEL','/SP-','/SUPPRESSMSGBOXES' -Wait -PassThru -NoNewWindow; \
                      if ($p.ExitCode -ne 0) {{ throw \"Git installer exited with $($p.ExitCode)\" }}; \
                      $gitPath=if ($arch -eq '64-bit') {{ 'C:\\Program Files\\Git\\cmd' }} else {{ 'C:\\Program Files (x86)\\Git\\cmd' }}; \
                      if (Test-Path $gitPath) {{ $env:Path+=\";$gitPath\" }}; \
                      Remove-Item $exe -Force -ErrorAction SilentlyContinue; \
-                     Write-Host 'Git installed successfully'",
-                    arch
+                     Write-Host 'Git installed successfully'"
                 );
                 Ok((
                     "powershell".to_string(),
@@ -292,23 +349,23 @@ Write-Host 'Node.js installed successfully'",
                 ))
             }
             "claude" => Ok((
-                "npm".to_string(),
-                vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into()],
+                "cmd".to_string(),
+                vec!["/C".into(), "npm".into(), "install".into(), "-g".into(), "@anthropic-ai/claude-code".into(), "--registry".into(), "https://registry.npmmirror.com".into()],
                 true,
             )),
             "codex" => Ok((
-                "npm".to_string(),
-                vec!["install".into(), "-g".into(), "@openai/codex".into()],
+                "cmd".to_string(),
+                vec!["/C".into(), "npm".into(), "install".into(), "-g".into(), "@openai/codex".into(), "--registry".into(), "https://registry.npmmirror.com".into()],
                 true,
             )),
             "gemini" => Ok((
-                "npm".to_string(),
-                vec!["install".into(), "-g".into(), "@google/gemini-cli".into()],
+                "cmd".to_string(),
+                vec!["/C".into(), "npm".into(), "install".into(), "-g".into(), "@google/gemini-cli".into(), "--registry".into(), "https://registry.npmmirror.com".into()],
                 true,
             )),
             "openclaw" => Ok((
-                "npm".to_string(),
-                vec!["install".into(), "-g".into(), "openclaw".into()],
+                "cmd".to_string(),
+                vec!["/C".into(), "npm".into(), "install".into(), "-g".into(), "openclaw@latest".into(), "--registry".into(), "https://registry.npmmirror.com".into()],
                 true,
             )),
             _ => Err(format!("Unknown tool id: {}", tool_id)),
@@ -319,10 +376,10 @@ Write-Host 'Node.js installed successfully'",
         match tool_id {
             "node" => Ok(("brew".to_string(), vec!["install".into(), "node".into()], false)),
             "git" => Ok(("brew".to_string(), vec!["install".into(), "git".into()], false)),
-            "claude" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into()], true)),
-            "codex" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@openai/codex".into()], true)),
-            "gemini" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@google/gemini-cli".into()], true)),
-            "openclaw" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "openclaw".into()], true)),
+            "claude" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
+            "codex" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@openai/codex".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
+            "gemini" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@google/gemini-cli".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
+            "openclaw" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "openclaw@latest".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
             _ => Err(format!("Unknown tool id: {}", tool_id)),
         }
     }
@@ -331,10 +388,10 @@ Write-Host 'Node.js installed successfully'",
         match tool_id {
             "node" => Ok(("sh".to_string(), vec!["-c".into(), "sudo apt-get install -y nodejs npm || sudo dnf install -y nodejs npm".into()], false)),
             "git" => Ok(("sh".to_string(), vec!["-c".into(), "sudo apt-get install -y git || sudo dnf install -y git".into()], false)),
-            "claude" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into()], true)),
-            "codex" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@openai/codex".into()], true)),
-            "gemini" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@google/gemini-cli".into()], true)),
-            "openclaw" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "openclaw".into()], true)),
+            "claude" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
+            "codex" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@openai/codex".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
+            "gemini" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@google/gemini-cli".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
+            "openclaw" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "openclaw@latest".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
             _ => Err(format!("Unknown tool id: {}", tool_id)),
         }
     }

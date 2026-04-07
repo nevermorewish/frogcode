@@ -4186,6 +4186,36 @@ export const api = {
     return await invoke("install_tool", { toolId });
   },
 
+  // ---------------------------------------------------------------------------
+  // IM Bridge (Feishu / WeChat sidecar)
+  // ---------------------------------------------------------------------------
+
+  imBridge: {
+    async getConfig(): Promise<{ appId: string; appSecret: string; projectPath: string; enabled: boolean }> {
+      return await invoke("im_bridge_get_config");
+    },
+
+    async saveConfig(config: { appId: string; appSecret: string; projectPath: string; enabled: boolean }): Promise<void> {
+      return await invoke("im_bridge_save_config", { config });
+    },
+
+    async start(): Promise<{ status: string; port: number | null; error: string | null; feishuStatus: string | null }> {
+      return await invoke("im_bridge_start");
+    },
+
+    async stop(): Promise<void> {
+      return await invoke("im_bridge_stop");
+    },
+
+    async status(): Promise<{ status: string; port: number | null; error: string | null; feishuStatus: string | null }> {
+      return await invoke("im_bridge_status");
+    },
+
+    async connectFeishu(): Promise<boolean> {
+      return await invoke("im_bridge_connect_feishu");
+    },
+  },
+
   /**
    * Gets Gemini CLI configuration
    * @returns Promise resolving to Gemini configuration

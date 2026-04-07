@@ -18,6 +18,10 @@ use std::sync::{Arc, Mutex};
 
 use commands::auth::{login_to_frogclaw, fetch_frogclaw_providers};
 use commands::home::{check_tools_installed, install_tool};
+use commands::im_bridge::{
+    im_bridge_connect_feishu, im_bridge_get_config, im_bridge_save_config, im_bridge_start,
+    im_bridge_status, im_bridge_stop, ImBridgeState,
+};
 use commands::acemcp::{
     enhance_prompt_with_context, export_acemcp_sidecar, get_extracted_sidecar_path,
     load_acemcp_config, preindex_project, save_acemcp_config, test_acemcp_availability,
@@ -212,6 +216,29 @@ fn main() {
             // Initialize Gemini process state
             app.manage(GeminiProcessState::default());
 
+            // Initialize IM bridge state
+            app.manage(ImBridgeState::default());
+
+            // Auto-start IM sidecar if user enabled it
+            let app_handle_for_im = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match commands::im_bridge::im_bridge_get_config().await {
+                    Ok(cfg) if cfg.enabled && !cfg.app_id.is_empty() => {
+                        let state = app_handle_for_im.state::<ImBridgeState>();
+                        match commands::im_bridge::im_bridge_start(state, app_handle_for_im.clone()).await {
+                            Ok(_) => {
+                                // Trigger Feishu connection
+                                let state2 = app_handle_for_im.state::<ImBridgeState>();
+                                let _ = commands::im_bridge::im_bridge_connect_feishu(state2).await;
+                                log::info!("IM bridge auto-started");
+                            }
+                            Err(e) => log::warn!("IM bridge auto-start failed: {}", e),
+                        }
+                    }
+                    _ => log::debug!("IM bridge not enabled, skipping auto-start"),
+                }
+            });
+
             // Initialize auto-compact manager for context management
             let auto_compact_manager =
                 Arc::new(commands::context_manager::AutoCompactManager::new());
@@ -265,6 +292,13 @@ fn main() {
                 // If main window is closing, close all session windows
                 if window_label == "main" {
                     log::info!("[Window] Main window closing, closing all session windows");
+
+                    // Stop IM bridge sidecar if running
+                    let app_for_im = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app_for_im.state::<ImBridgeState>();
+                        let _ = commands::im_bridge::im_bridge_stop(state).await;
+                    });
 
                     let app = window.app_handle();
                     let windows_to_close: Vec<String> = app
@@ -557,6 +591,13 @@ fn main() {
             // Home page tool detection
             check_tools_installed,
             install_tool,
+            // IM Bridge
+            im_bridge_get_config,
+            im_bridge_save_config,
+            im_bridge_start,
+            im_bridge_stop,
+            im_bridge_status,
+            im_bridge_connect_feishu,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

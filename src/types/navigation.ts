@@ -1,4 +1,5 @@
 export type View =
+  | "home"
   | "projects"
   | "editor"
   | "codex-editor"

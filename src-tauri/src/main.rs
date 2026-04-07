@@ -17,6 +17,7 @@ use claude_binary::init_shell_environment;
 use std::sync::{Arc, Mutex};
 
 use commands::auth::{login_to_frogclaw, fetch_frogclaw_providers};
+use commands::home::{check_tools_installed, install_tool};
 use commands::acemcp::{
     enhance_prompt_with_context, export_acemcp_sidecar, get_extracted_sidecar_path,
     load_acemcp_config, preindex_project, save_acemcp_config, test_acemcp_availability,
@@ -553,6 +554,9 @@ fn main() {
             // Frogclaw Authentication
             login_to_frogclaw,
             fetch_frogclaw_providers,
+            // Home page tool detection
+            check_tools_installed,
+            install_tool,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -20,10 +20,10 @@ interface NavigationContextType {
 const NavigationContext = createContext<NavigationContextType | undefined>(undefined);
 
 export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentView, setCurrentView] = useState<View>("projects");
+  const [currentView, setCurrentView] = useState<View>("home");
   const [viewParams, setViewParams] = useState<Record<string, any>>({});
   // Initialize history with the default view and empty params
-  const [history, setHistory] = useState<HistoryItem[]>([{ view: "projects", params: {} }]);
+  const [history, setHistory] = useState<HistoryItem[]>([{ view: "home", params: {} }]);
   const [previousView, setPreviousView] = useState<View | null>(null);
   const [navigationInterceptor, setNavigationInterceptor] = useState<((nextView: View) => boolean) | null>(null);
 
@@ -77,10 +77,10 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
     } else {
       // Fallback if history is empty (shouldn't happen with init state)
       if (navigationInterceptor) {
-        const shouldProceed = navigationInterceptor("projects");
+        const shouldProceed = navigationInterceptor("home");
         if (!shouldProceed) return;
       }
-      setCurrentView("projects");
+      setCurrentView("home");
       setViewParams({});
     }
   }, [history, navigationInterceptor, currentView]);

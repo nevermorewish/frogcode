@@ -1231,6 +1231,7 @@
     "projectDeleted": "Project \"{{name}}\" deleted successfully"
   },
   "sidebar": {
+    "home": "Home",
     "about": "About",
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
@@ -1242,6 +1243,58 @@
     "mcpTools": "MCP Tools",
     "extensions": "Extensions",
     "themeToggle": "Theme Toggle"
+  },
+  "home": {
+    "title": "Home",
+    "subtitle": "Development Environment Check",
+    "installed": "Installed",
+    "notInstalled": "Not Installed",
+    "version": "Version",
+    "path": "Path",
+    "checking": "Checking...",
+    "refresh": "Refresh",
+    "toolsReady": "Tools Ready",
+    "toolsMissing": "Tools Missing",
+    "install": "Install",
+    "installing": "Installing",
+    "installAll": "Install All",
+    "dashboardSubtitle": "Quick access to common features and settings",
+    "devEnv": {
+      "title": "Development Environment",
+      "subtitle": "Check installation of essential dev tools",
+      "missingHint": "{{count}} tool(s) not installed"
+    },
+    "frogclaw": {
+      "title": "Frogclaw Connection",
+      "subtitle": "Sign in and select an API token",
+      "connected": "Connected",
+      "username": "Username",
+      "usernamePlaceholder": "Enter username",
+      "password": "Password",
+      "passwordPlaceholder": "Enter password",
+      "login": "Sign In",
+      "loginSuccess": "Signed in successfully",
+      "loginFailed": "Sign in failed",
+      "loggedInAs": "Current user",
+      "logout": "Sign Out",
+      "selectToken": "Select Token",
+      "noTokens": "No tokens available",
+      "tokenSwitched": "Token switched",
+      "tokenSwitchFailed": "Failed to switch token"
+    },
+    "imChannel": {
+      "title": "IM Channel Settings",
+      "subtitle": "Configure notification channels",
+      "connected": "Connected",
+      "notConfigured": "Not Configured",
+      "configure": "Configure",
+      "comingSoon": "configuration coming soon",
+      "feishu": "FeiShu",
+      "feishuDesc": "Receive notifications via FeiShu bot with message cards and buttons",
+      "wechat": "WeChat",
+      "wechatDesc": "Push messages to personal WeChat via WeCom or Server Chan",
+      "hint": "Once configured, task completion and error events will be pushed to the selected channel automatically"
+    }
   },
   "hooks": {
     "userHooks": "User Hooks",

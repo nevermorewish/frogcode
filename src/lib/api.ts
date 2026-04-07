@@ -4168,6 +4168,25 @@ export const api = {
   },
 
   /**
+   * Check installation status of development tools (Node.js, Git, Claude Code, etc.)
+   */
+  async checkToolsInstalled(): Promise<{ tools: Array<{ id: string; name: string; installed: boolean; version: string | null; path: string | null; installable: boolean }> }> {
+    try {
+      return await invoke("check_tools_installed");
+    } catch (error) {
+      console.error("Failed to check tools installation:", error);
+      return { tools: [] };
+    }
+  },
+
+  /**
+   * Silently install a tool by id (e.g. "node", "git", "claude", "codex", "gemini", "openclaw").
+   */
+  async installTool(toolId: string): Promise<{ success: boolean; stdout: string; stderr: string; message: string }> {
+    return await invoke("install_tool", { toolId });
+  },
+
+  /**
    * Gets Gemini CLI configuration
    * @returns Promise resolving to Gemini configuration
    */

@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ProjectSettings } from '@/components/ProjectSettings';
 import { EnhancedHooksManager } from '@/components/EnhancedHooksManager';
 import { ClaudeExtensionsManager } from '@/components/ClaudeExtensionsManager';
+import { HomePage } from '@/components/HomePage';
 import { ProjectCardSkeleton, SessionListItemSkeleton } from '@/components/ui/skeleton';
 import { useNavigation } from '@/contexts/NavigationContext';
 import { useProject } from '@/contexts/ProjectContext';
@@ -250,6 +251,9 @@ export const ViewRouter: React.FC = () => {
   // Render Logic
   const renderContent = () => {
     switch (currentView) {
+      case "home":
+        return <HomePage />;
+
       case "enhanced-hooks-manager":
         return (
           <EnhancedHooksManager

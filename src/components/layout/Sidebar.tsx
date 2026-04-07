@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Sparkles,
   User,
+  Home,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { View } from '@/types/navigation';
@@ -79,6 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [currentView]);
 
   const mainNavItems: NavItem[] = [
+    { view: 'home', icon: Home, label: t('sidebar.home') },
     { view: 'projects', icon: FolderOpen, label: t('common.ccProjectsTitle') },
     { view: 'claude-tab-manager', icon: Terminal, label: t('sidebar.sessionManagement') },
     { view: 'editor', icon: FileText, label: t('sidebar.claudePrompts') },
@@ -221,108 +223,139 @@ export const Sidebar: React.FC<SidebarProps> = ({
           "flex flex-col gap-1 pt-2 border-t border-[var(--glass-border)]",
           isExpanded ? "px-2" : "items-center"
         )}>
-          <Popover
-            align="start"
-            side="top"
-            className="w-56 p-1"
-            trigger={
-              isExpanded ? (
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start gap-2 px-3 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                >
-                  <User className="w-5 h-5" strokeWidth={2} />
-                  <span className="ml-1 text-sm font-medium truncate">
-                    {isAuthenticated ? (user?.display_name || user?.username) : t('sidebar.login', 'Sign In')}
-                  </span>
-                </Button>
-              ) : (
-                <TooltipProvider delayDuration={0}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        className="w-10 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                      >
-                        <User className="w-5 h-5" strokeWidth={2} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      <p>{isAuthenticated ? (user?.display_name || user?.username) : t('sidebar.login', 'Sign In')}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )
-            }
-            content={
-              <div className="flex flex-col gap-0.5">
-                {isAuthenticated ? (
-                  <>
-                    <div className="px-3 py-2 text-sm text-muted-foreground truncate">
+          {isAuthenticated ? (
+            <Popover
+              align="start"
+              side="top"
+              className="w-56 p-1"
+              trigger={
+                isExpanded ? (
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start gap-2 px-3 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  >
+                    <User className="w-5 h-5" strokeWidth={2} />
+                    <span className="ml-1 text-sm font-medium truncate">
                       {user?.display_name || user?.username}
-                    </div>
-                    {tokens.length > 1 && (
-                      <div className="px-2 py-1">
-                        <div className="text-xs text-muted-foreground mb-1 px-1">{t('apiToken', 'API Token')}</div>
-                        <select
-                          className="w-full text-xs px-2 py-1.5 rounded-md border border-border bg-background text-foreground cursor-pointer"
-                          value={selectedTokenId ?? ''}
-                          disabled={switchingToken}
-                          onChange={async (e) => {
-                            const id = Number(e.target.value);
-                            if (id) {
-                              setSwitchingToken(true);
-                              try { await selectToken(id); } finally { setSwitchingToken(false); }
-                            }
-                          }}
-                        >
-                          {tokens.map((token) => (
-                            <option key={token.id} value={token.id}>
-                              {token.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start gap-2 h-9"
-                      onClick={() => onNavigate('settings')}
-                    >
-                      <Settings className="w-4 h-4" />
-                      {t('navigation.settings')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start gap-2 h-9 text-destructive hover:text-destructive"
-                      onClick={logout}
-                    >
-                      {t('sidebar.logout', 'Sign Out')}
-                    </Button>
-                  </>
+                    </span>
+                  </Button>
                 ) : (
-                  <>
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start gap-2 h-9"
-                      onClick={() => setLoginOpen(true)}
-                    >
-                      <User className="w-4 h-4" />
-                      {t('sidebar.login', 'Sign In')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start gap-2 h-9"
-                      onClick={() => onNavigate('settings')}
-                    >
-                      <Settings className="w-4 h-4" />
-                      {t('navigation.settings')}
-                    </Button>
-                  </>
-                )}
-              </div>
-            }
-          />
+                  <TooltipProvider delayDuration={0}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          className="w-10 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        >
+                          <User className="w-5 h-5" strokeWidth={2} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">
+                        <p>{user?.display_name || user?.username}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )
+              }
+              content={
+                <div className="flex flex-col gap-0.5">
+                  <div className="px-3 py-2 text-sm text-muted-foreground truncate">
+                    {user?.display_name || user?.username}
+                  </div>
+                  {tokens.length > 1 && (
+                    <div className="px-2 py-1">
+                      <div className="text-xs text-muted-foreground mb-1 px-1">{t('apiToken', 'API Token')}</div>
+                      <select
+                        className="w-full text-xs px-2 py-1.5 rounded-md border border-border bg-background text-foreground cursor-pointer"
+                        value={selectedTokenId ?? ''}
+                        disabled={switchingToken}
+                        onChange={async (e) => {
+                          const id = Number(e.target.value);
+                          if (id) {
+                            setSwitchingToken(true);
+                            try { await selectToken(id); } finally { setSwitchingToken(false); }
+                          }
+                        }}
+                      >
+                        {tokens.map((token) => (
+                          <option key={token.id} value={token.id}>
+                            {token.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start gap-2 h-9 text-destructive hover:text-destructive"
+                    onClick={logout}
+                  >
+                    {t('sidebar.logout', 'Sign Out')}
+                  </Button>
+                </div>
+              }
+            />
+          ) : isExpanded ? (
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2 px-3 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              onClick={() => setLoginOpen(true)}
+            >
+              <User className="w-5 h-5" strokeWidth={2} />
+              <span className="ml-1 text-sm font-medium truncate">
+                {t('sidebar.login', 'Sign In')}
+              </span>
+            </Button>
+          ) : (
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="w-10 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    onClick={() => setLoginOpen(true)}
+                  >
+                    <User className="w-5 h-5" strokeWidth={2} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p>{t('sidebar.login', 'Sign In')}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          {/* Settings button - standalone, below login */}
+          {isExpanded ? (
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2 px-3 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              onClick={() => onNavigate('settings')}
+            >
+              <Settings className="w-5 h-5" strokeWidth={2} />
+              <span className="ml-1 text-sm font-medium truncate">
+                {t('navigation.settings')}
+              </span>
+            </Button>
+          ) : (
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="w-10 h-10 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    onClick={() => onNavigate('settings')}
+                  >
+                    <Settings className="w-5 h-5" strokeWidth={2} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p>{t('navigation.settings')}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
           <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
 
           <div className={cn("flex", isExpanded ? "justify-end" : "justify-center")}>

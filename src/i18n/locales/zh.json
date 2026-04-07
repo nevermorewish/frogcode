@@ -1263,6 +1263,7 @@
     "projectDeleted": "项目 \"{{name}}\" 已删除成功"
   },
   "sidebar": {
+    "home": "首页",
     "about": "关于",
     "collapseSidebar": "收起侧边栏",
     "expandSidebar": "展开侧边栏",
@@ -1274,6 +1275,58 @@
     "mcpTools": "MCP 工具",
     "extensions": "扩展",
     "themeToggle": "主题切换"
+  },
+  "home": {
+    "title": "首页",
+    "subtitle": "开发环境检测",
+    "installed": "已安装",
+    "notInstalled": "未安装",
+    "version": "版本",
+    "path": "路径",
+    "checking": "检测中...",
+    "refresh": "重新检测",
+    "toolsReady": "工具就绪",
+    "toolsMissing": "工具缺失",
+    "install": "安装",
+    "installing": "安装中",
+    "installAll": "一键安装",
+    "dashboardSubtitle": "快速访问和配置常用功能",
+    "devEnv": {
+      "title": "开发环境检测",
+      "subtitle": "检测必备开发工具的安装情况",
+      "missingHint": "有 {{count}} 个工具未安装"
+    },
+    "frogclaw": {
+      "title": "Frogclaw 连接",
+      "subtitle": "登录并选择 API 令牌",
+      "connected": "已连接",
+      "username": "用户名",
+      "usernamePlaceholder": "请输入用户名",
+      "password": "密码",
+      "passwordPlaceholder": "请输入密码",
+      "login": "登录",
+      "loginSuccess": "登录成功",
+      "loginFailed": "登录失败",
+      "loggedInAs": "当前用户",
+      "logout": "退出",
+      "selectToken": "选择令牌",
+      "noTokens": "暂无可用令牌",
+      "tokenSwitched": "令牌已切换",
+      "tokenSwitchFailed": "令牌切换失败"
+    },
+    "imChannel": {
+      "title": "IM 通道设置",
+      "subtitle": "配置消息通知渠道",
+      "connected": "已连接",
+      "notConfigured": "未配置",
+      "configure": "配置",
+      "comingSoon": "配置功能即将推出",
+      "feishu": "飞书",
+      "feishuDesc": "通过飞书机器人接收通知，支持消息卡片和交互按钮",
+      "wechat": "微信",
+      "wechatDesc": "通过企业微信或 Server 酱推送消息到个人微信",
+      "hint": "配置完成后，任务完成、错误通知等事件将自动推送到所选通道"
+    }
   },
   "hooks": {
     "userHooks": "用户钩子",

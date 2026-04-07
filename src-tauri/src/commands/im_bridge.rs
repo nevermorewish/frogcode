@@ -250,11 +250,21 @@ fn spawn_sse_listener(
                                                 let session_id = evt.get("sessionId")
                                                     .and_then(|v| v.as_str())
                                                     .map(|s| s.to_string());
+                                                let reply_to = evt.get("replyToMessageId")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string());
+                                                let image_files: Vec<String> = evt.get("imageFiles")
+                                                    .and_then(|v| v.as_array())
+                                                    .map(|arr| arr.iter()
+                                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                                        .collect())
+                                                    .unwrap_or_default();
                                                 if !chat_id.is_empty() && !prompt.is_empty() {
                                                     let app_for_exec = app.clone();
                                                     tauri::async_runtime::spawn(async move {
                                                         if let Err(e) = execute_claude_for_chat(
                                                             app_for_exec, port, chat_id, prompt, cwd, session_id,
+                                                            reply_to, image_files,
                                                         ).await {
                                                             warn!("execute_claude_for_chat failed: {}", e);
                                                         }
@@ -300,6 +310,16 @@ struct CardState {
     tool_calls: Vec<CardToolCall>,
     #[serde(rename = "errorMessage", skip_serializing_if = "Option::is_none")]
     error_message: Option<String>,
+    #[serde(rename = "totalTokens", skip_serializing_if = "Option::is_none")]
+    total_tokens: Option<u64>,
+    #[serde(rename = "contextWindow", skip_serializing_if = "Option::is_none")]
+    context_window: Option<u64>,
+    #[serde(rename = "costUsd", skip_serializing_if = "Option::is_none")]
+    cost_usd: Option<f64>,
+    #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(rename = "model", skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,12 +335,14 @@ async fn post_card_to_sidecar(
     chat_id: &str,
     card_state: &CardState,
     action: &str,
+    reply_to_message_id: Option<&str>,
 ) {
     let url = format!("http://127.0.0.1:{}/feishu-card", port);
     let body = serde_json::json!({
         "chatId": chat_id,
         "cardState": card_state,
         "action": action,
+        "replyToMessageId": reply_to_message_id,
     });
     if let Err(e) = client.post(&url).json(&body).send().await {
         debug!("post_card_to_sidecar failed: {}", e);
@@ -345,8 +367,10 @@ async fn execute_claude_for_chat(
     prompt: String,
     cwd: String,
     session_id: Option<String>,
+    reply_to_message_id: Option<String>,
+    image_files: Vec<String>,
 ) -> Result<(), String> {
-    info!("execute_claude_for_chat: chat={}, cwd={}, has_session={}", chat_id, cwd, session_id.is_some());
+    info!("execute_claude_for_chat: chat={}, cwd={}, has_session={}, images={}", chat_id, cwd, session_id.is_some(), image_files.len());
 
     let claude_path = crate::claude_binary::find_claude_binary(&app)?;
 
@@ -356,6 +380,16 @@ async fn execute_claude_for_chat(
             .unwrap_or_else(|_| ".".to_string())
     } else {
         cwd
+    };
+
+    // Build prompt: if there are image files, prepend them as context
+    let final_prompt = if image_files.is_empty() {
+        prompt.clone()
+    } else {
+        let file_refs: Vec<String> = image_files.iter()
+            .map(|f| format!("[Attached file: {}]", f))
+            .collect();
+        format!("{}\n\n{}", file_refs.join("\n"), prompt)
     };
 
     // Build args matching frogcode's approach
@@ -369,7 +403,7 @@ async fn execute_claude_for_chat(
     args.push("--verbose".to_string());
     args.push("--dangerously-skip-permissions".to_string());
     args.push("-p".to_string());
-    args.push(prompt.clone());
+    args.push(final_prompt);
 
     let mut cmd = tokio::process::Command::new(&claude_path);
     cmd.args(&args);
@@ -389,6 +423,7 @@ async fn execute_claude_for_chat(
     let stderr = child.stderr.take().ok_or("no stderr")?;
 
     let http = reqwest::Client::new();
+    let started_at = std::time::Instant::now();
 
     // Send initial "thinking" card
     let mut card = CardState {
@@ -396,8 +431,13 @@ async fn execute_claude_for_chat(
         response_text: String::new(),
         tool_calls: Vec::new(),
         error_message: None,
+        total_tokens: None,
+        context_window: None,
+        cost_usd: None,
+        duration_ms: None,
+        model: None,
     };
-    post_card_to_sidecar(&http, sidecar_port, &chat_id, &card, "send").await;
+    post_card_to_sidecar(&http, sidecar_port, &chat_id, &card, "send", reply_to_message_id.as_deref()).await;
 
     // Read stderr in background (for error reporting)
     let stderr_buf = Arc::new(std::sync::Mutex::new(String::new()));
@@ -426,7 +466,7 @@ async fn execute_claude_for_chat(
     let mut reader = tokio::io::BufReader::new(stdout);
     let mut line_buf = String::new();
     let mut last_update = std::time::Instant::now();
-    let update_interval = std::time::Duration::from_millis(800);
+    let update_interval = std::time::Duration::from_millis(300);
 
     loop {
         line_buf.clear();
@@ -456,9 +496,12 @@ async fn execute_claude_for_chat(
 
         let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Init
+        // Init / system message — capture model info
         if msg_type == "system" {
             card.status = "running".to_string();
+            if let Some(model) = msg.get("model").and_then(|v| v.as_str()) {
+                card.model = Some(model.to_string());
+            }
         }
 
         // Assistant message with content blocks
@@ -501,7 +544,7 @@ async fn execute_claude_for_chat(
             }
         }
 
-        // Result
+        // Result — capture stats
         if msg_type == "result" {
             let is_error = msg.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false)
                 || msg.get("subtype").and_then(|v| v.as_str()) == Some("error");
@@ -517,12 +560,38 @@ async fn execute_claude_for_chat(
                     }
                 }
             }
+            // Extract stats
+            card.duration_ms = Some(started_at.elapsed().as_millis() as u64);
+            if let Some(cost) = msg.get("total_cost_usd").and_then(|v| v.as_f64()) {
+                card.cost_usd = Some(cost);
+            }
+            if let Some(dm) = msg.get("duration_ms").and_then(|v| v.as_u64()) {
+                card.duration_ms = Some(dm);
+            }
+            // Model usage — extract total tokens from modelUsage
+            if let Some(usage) = msg.get("modelUsage").and_then(|v| v.as_object()) {
+                let mut total = 0u64;
+                let mut ctx = 0u64;
+                for (_model_name, stats) in usage {
+                    if let Some(inp) = stats.get("inputTokens").and_then(|v| v.as_u64()) {
+                        total += inp;
+                    }
+                    if let Some(out) = stats.get("outputTokens").and_then(|v| v.as_u64()) {
+                        total += out;
+                    }
+                    if let Some(cw) = stats.get("contextWindow").and_then(|v| v.as_u64()) {
+                        if cw > ctx { ctx = cw; }
+                    }
+                }
+                if total > 0 { card.total_tokens = Some(total); }
+                if ctx > 0 { card.context_window = Some(ctx); }
+            }
         }
 
         // Throttled update
         if last_update.elapsed() >= update_interval {
             last_update = std::time::Instant::now();
-            post_card_to_sidecar(&http, sidecar_port, &chat_id, &card, "auto").await;
+            post_card_to_sidecar(&http, sidecar_port, &chat_id, &card, "auto", None).await;
         }
     }
 
@@ -552,7 +621,7 @@ async fn execute_claude_for_chat(
     }
 
     // Final update
-    post_card_to_sidecar(&http, sidecar_port, &chat_id, &card, "auto").await;
+    post_card_to_sidecar(&http, sidecar_port, &chat_id, &card, "auto", None).await;
     info!("execute_claude_for_chat done: chat={}, status={}", chat_id, card.status);
 
     Ok(())

@@ -215,7 +215,16 @@ fn run_version(cmd: &str, args: &[&str]) -> Option<String> {
 
 fn check_tool(id: &str, name: &str, cmd: &str, args: &[&str], installable: bool) -> ToolStatus {
     let path = run_lookup(cmd);
-    let version = if path.is_some() { run_version(cmd, args) } else { None };
+    // Use the resolved path for version check — bare command may fail in GUI processes
+    let version = if let Some(ref p) = path {
+        run_version(p, args).or_else(|| run_version(cmd, args))
+    } else {
+        None
+    };
+    write_log(&format!(
+        "check_tool({}): path={:?}, version={:?}, installed={}",
+        id, path, version, path.is_some()
+    ));
     ToolStatus {
         id: id.to_string(),
         name: name.to_string(),
@@ -230,6 +239,17 @@ fn check_tool(id: &str, name: &str, cmd: &str, args: &[&str], installable: bool)
 pub async fn check_tools_installed() -> Result<HomeToolsStatus, String> {
     let tools = tokio::task::spawn_blocking(|| {
         ensure_windows_path();
+        write_log("========== check_tools_installed ==========");
+        write_log(&format!("PATH: {}", std::env::var("PATH").unwrap_or_default()));
+        #[cfg(target_os = "windows")]
+        {
+            let prefix = npm_global_prefix();
+            write_log(&format!("npm prefix -g: {:?}", prefix));
+            for cmd in &["claude", "codex", "gemini"] {
+                let via_where = run_lookup(cmd);
+                write_log(&format!("lookup({}): {:?}", cmd, via_where));
+            }
+        }
         vec![
             check_tool("node", "Node.js", "node", &["--version"], true),
             check_tool("git", "Git", "git", &["--version"], true),

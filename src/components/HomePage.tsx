@@ -258,7 +258,7 @@ const DevEnvironmentCard: React.FC<{
                     </div>
                   ) : (
                     <div className="text-[10px] text-muted-foreground">
-                      {t('home.notInstalled')}
+                      {tool.installed ? t('home.installed', '已安装') : t('home.notInstalled')}
                     </div>
                   )}
                 </div>

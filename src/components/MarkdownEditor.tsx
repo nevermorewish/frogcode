@@ -13,7 +13,7 @@ interface MarkdownEditorProps {
   /**
    * Callback to go back to the main view
    */
-  onBack: () => void;
+  onBack?: () => void;
   /**
    * Optional className for styling
    */
@@ -85,9 +85,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       );
       if (!confirmLeave) return;
     }
-    onBack();
+    onBack?.();
   };
-  
+
   return (
     <div className={cn("flex flex-col h-full bg-background", className)}>
       <div className="w-full max-w-5xl mx-auto flex flex-col h-full">
@@ -99,15 +99,17 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           className="flex items-center justify-between p-4 border-b border-border"
         >
           <div className="flex items-center space-x-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleBack}
-              className="h-8 w-8"
-              aria-label="返回"
-            >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            </Button>
+            {onBack && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleBack}
+                className="h-8 w-8"
+                aria-label="返回"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
             <div>
               <h2 className="text-lg font-semibold">CLAUDE.md</h2>
               <p className="text-xs text-muted-foreground">

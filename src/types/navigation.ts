@@ -4,6 +4,7 @@ export type View =
   | "editor"
   | "codex-editor"
   | "gemini-editor"
+  | "prompt-editor"
   | "claude-file-editor"
   | "claude-code-session"
   | "claude-tab-manager"

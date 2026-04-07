@@ -13,7 +13,7 @@ interface CodexMarkdownEditorProps {
   /**
    * Callback to go back to the main view
    */
-  onBack: () => void;
+  onBack?: () => void;
   /**
    * Optional className for styling
    */
@@ -96,7 +96,7 @@ export const CodexMarkdownEditor: React.FC<CodexMarkdownEditorProps> = ({
       );
       if (!confirmLeave) return;
     }
-    onBack();
+    onBack?.();
   };
 
   return (
@@ -110,15 +110,17 @@ export const CodexMarkdownEditor: React.FC<CodexMarkdownEditorProps> = ({
           className="flex items-center justify-between p-4 border-b border-border"
         >
           <div className="flex items-center space-x-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleBack}
-              className="h-8 w-8"
-              aria-label="返回"
-            >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            </Button>
+            {onBack && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleBack}
+                className="h-8 w-8"
+                aria-label="返回"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
             <div>
               <h2 className="text-lg font-semibold">Codex AGENTS.md</h2>
               <p className="text-xs text-muted-foreground">

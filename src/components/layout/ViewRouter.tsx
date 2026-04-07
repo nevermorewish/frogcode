@@ -11,6 +11,7 @@ import { RunningClaudeSessions } from "@/components/RunningClaudeSessions";
 import { MarkdownEditor } from "@/components/MarkdownEditor";
 import { CodexMarkdownEditor } from "@/components/CodexMarkdownEditor";
 import { GeminiMarkdownEditor } from "@/components/GeminiMarkdownEditor";
+import { PromptEditorTabs } from "@/components/PromptEditorTabs";
 import { ClaudeFileEditor } from "@/components/ClaudeFileEditor";
 import { Settings } from "@/components/Settings";
 import { ClaudeCodeSession } from "@/components/ClaudeCodeSession";
@@ -271,6 +272,13 @@ export const ViewRouter: React.FC = () => {
                 onBack={goBack}
               />
             </div>
+          </div>
+        );
+
+      case "prompt-editor":
+        return (
+          <div className="flex-1 overflow-hidden">
+            <PromptEditorTabs />
           </div>
         );
 

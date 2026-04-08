@@ -12,6 +12,7 @@ import {
   HelpCircle,
   User,
   Home,
+  MessageSquare,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { View } from '@/types/navigation';
@@ -85,6 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { view: 'usage-dashboard', icon: BarChart2, label: t('sidebar.usageStats') },
     { view: 'mcp', icon: Layers, label: t('sidebar.mcpTools') },
     { view: 'claude-extensions', icon: Package, label: t('sidebar.extensions') },
+    { view: 'openclaw-sessions', icon: MessageSquare, label: 'OpenClaw' },
   ];
 
   const NavButton = ({ item }: { item: NavItem }) => {

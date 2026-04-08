@@ -2,7 +2,7 @@ pub mod acemcp;
 pub mod auth;
 pub mod claude;
 pub mod home; // 首页工具检测
-pub mod im_bridge; // IM 桥接 (Feishu/WeChat via Node sidecar)
+pub mod platform_bridge; // Platform 桥接 (Feishu 等 IM 通过 Node sidecar，多 CLI adapter)
 pub mod clipboard;
 pub mod codex; // OpenAI Codex integration
 pub mod context_commands;

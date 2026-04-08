@@ -4187,32 +4187,77 @@ export const api = {
   },
 
   // ---------------------------------------------------------------------------
-  // IM Bridge (Feishu / WeChat sidecar)
+  // Platform Bridge (Feishu + multi-CLI adapter sidecar)
   // ---------------------------------------------------------------------------
 
-  imBridge: {
-    async getConfig(): Promise<{ appId: string; appSecret: string; projectPath: string; enabled: boolean }> {
-      return await invoke("im_bridge_get_config");
+  platform: {
+    async getConfig(): Promise<{ appId: string; appSecret: string; projectPath: string; enabled: boolean; agentType?: string }> {
+      return await invoke("platform_get_config");
     },
 
-    async saveConfig(config: { appId: string; appSecret: string; projectPath: string; enabled: boolean }): Promise<void> {
-      return await invoke("im_bridge_save_config", { config });
+    async saveConfig(config: { appId: string; appSecret: string; projectPath: string; enabled: boolean; agentType?: string }): Promise<void> {
+      return await invoke("platform_save_config", { config });
     },
 
     async start(): Promise<{ status: string; port: number | null; error: string | null; feishuStatus: string | null }> {
-      return await invoke("im_bridge_start");
+      return await invoke("platform_start");
     },
 
     async stop(): Promise<void> {
-      return await invoke("im_bridge_stop");
+      return await invoke("platform_stop");
     },
 
     async status(): Promise<{ status: string; port: number | null; error: string | null; feishuStatus: string | null }> {
-      return await invoke("im_bridge_status");
+      return await invoke("platform_status");
     },
 
     async connectFeishu(): Promise<boolean> {
-      return await invoke("im_bridge_connect_feishu");
+      return await invoke("platform_connect_feishu");
+    },
+
+    async getAgentConfig(agentType: string): Promise<Record<string, any>> {
+      return await invoke("platform_get_agent_config", { agentType });
+    },
+
+    async saveAgentConfig(agentType: string, config: Record<string, any>): Promise<void> {
+      return await invoke("platform_save_agent_config", { agentType, config });
+    },
+
+    async getOpenclawStatus(): Promise<{
+      ok: boolean;
+      active: boolean;
+      agentType: string;
+      processAlive?: boolean;
+      wsConnected?: boolean;
+      gatewayPort?: number;
+      started?: boolean;
+      binPath?: string | null;
+      stateDir?: string;
+      error?: string | null;
+      logPath?: string | null;
+      logTail?: string[];
+    }> {
+      return await invoke("platform_get_openclaw_status");
+    },
+
+    async openclawStart(): Promise<{ ok: boolean; error?: string }> {
+      return await invoke("platform_openclaw_start");
+    },
+
+    async openclawStop(): Promise<{ ok: boolean; error?: string }> {
+      return await invoke("platform_openclaw_stop");
+    },
+
+    async openclawRestart(): Promise<{ ok: boolean; error?: string }> {
+      return await invoke("platform_openclaw_restart");
+    },
+
+    async listOpenclawSessions(): Promise<{ ok: boolean; sessions: any[] }> {
+      return await invoke("platform_list_openclaw_sessions");
+    },
+
+    async getOpenclawSession(id: string): Promise<{ ok: boolean; summary: any; messages: any[] }> {
+      return await invoke("platform_get_openclaw_session", { id });
     },
   },
 

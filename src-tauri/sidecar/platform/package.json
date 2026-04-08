@@ -1,0 +1,19 @@
+{
+  "name": "frogcode-platform-sidecar",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Platform sidecar for Frogcode (Feishu + multi-CLI adapter: Claude Code / OpenClaw)",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=cjs --outfile=../../binaries/frogcode-platform-sidecar.cjs --minify --external:fsevents"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.58.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0"
+  }
+}

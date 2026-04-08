@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useImBridgeStatus } from '@/hooks/useImBridgeStatus';
+import { usePlatformStatus } from '@/hooks/usePlatformStatus';
 import { FeishuSetupDialog } from '@/components/im/FeishuSetupDialog';
 import {
   CheckCircle2,
@@ -527,7 +527,7 @@ const IMChannelCard: React.FC<{
 }> = ({ onToast }) => {
   const { t } = useTranslation();
   const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
-  const bridge = useImBridgeStatus();
+  const bridge = usePlatformStatus();
 
   // Derive Feishu card props from bridge status
   const feishuConnected = bridge.status === 'running' && bridge.feishuStatus === 'running';

@@ -18,9 +18,12 @@ use std::sync::{Arc, Mutex};
 
 use commands::auth::{login_to_frogclaw, fetch_frogclaw_providers};
 use commands::home::{check_tools_installed, install_tool};
-use commands::im_bridge::{
-    im_bridge_connect_feishu, im_bridge_get_config, im_bridge_save_config, im_bridge_start,
-    im_bridge_status, im_bridge_stop, ImBridgeState,
+use commands::platform_bridge::{
+    platform_connect_feishu, platform_get_agent_config, platform_get_config,
+    platform_get_openclaw_session, platform_get_openclaw_status, platform_list_openclaw_sessions,
+    platform_openclaw_restart, platform_openclaw_start, platform_openclaw_stop,
+    platform_save_agent_config, platform_save_config, platform_start, platform_status,
+    platform_stop, PlatformBridgeState,
 };
 use commands::acemcp::{
     enhance_prompt_with_context, export_acemcp_sidecar, get_extracted_sidecar_path,
@@ -216,26 +219,26 @@ fn main() {
             // Initialize Gemini process state
             app.manage(GeminiProcessState::default());
 
-            // Initialize IM bridge state
-            app.manage(ImBridgeState::default());
+            // Initialize platform bridge state
+            app.manage(PlatformBridgeState::default());
 
-            // Auto-start IM sidecar if user enabled it
-            let app_handle_for_im = app.handle().clone();
+            // Auto-start platform sidecar if user enabled it
+            let app_handle_for_platform = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match commands::im_bridge::im_bridge_get_config().await {
+                match commands::platform_bridge::platform_get_config().await {
                     Ok(cfg) if cfg.enabled && !cfg.app_id.is_empty() => {
-                        let state = app_handle_for_im.state::<ImBridgeState>();
-                        match commands::im_bridge::im_bridge_start(state, app_handle_for_im.clone()).await {
+                        let state = app_handle_for_platform.state::<PlatformBridgeState>();
+                        match commands::platform_bridge::platform_start(state, app_handle_for_platform.clone()).await {
                             Ok(_) => {
                                 // Trigger Feishu connection
-                                let state2 = app_handle_for_im.state::<ImBridgeState>();
-                                let _ = commands::im_bridge::im_bridge_connect_feishu(state2).await;
-                                log::info!("IM bridge auto-started");
+                                let state2 = app_handle_for_platform.state::<PlatformBridgeState>();
+                                let _ = commands::platform_bridge::platform_connect_feishu(state2).await;
+                                log::info!("Platform bridge auto-started");
                             }
-                            Err(e) => log::warn!("IM bridge auto-start failed: {}", e),
+                            Err(e) => log::warn!("Platform bridge auto-start failed: {}", e),
                         }
                     }
-                    _ => log::debug!("IM bridge not enabled, skipping auto-start"),
+                    _ => log::debug!("Platform bridge not enabled, skipping auto-start"),
                 }
             });
 
@@ -293,11 +296,11 @@ fn main() {
                 if window_label == "main" {
                     log::info!("[Window] Main window closing, closing all session windows");
 
-                    // Stop IM bridge sidecar if running
-                    let app_for_im = window.app_handle().clone();
+                    // Stop platform bridge sidecar if running
+                    let app_for_platform = window.app_handle().clone();
                     tauri::async_runtime::spawn(async move {
-                        let state = app_for_im.state::<ImBridgeState>();
-                        let _ = commands::im_bridge::im_bridge_stop(state).await;
+                        let state = app_for_platform.state::<PlatformBridgeState>();
+                        let _ = commands::platform_bridge::platform_stop(state).await;
                     });
 
                     let app = window.app_handle();
@@ -591,13 +594,21 @@ fn main() {
             // Home page tool detection
             check_tools_installed,
             install_tool,
-            // IM Bridge
-            im_bridge_get_config,
-            im_bridge_save_config,
-            im_bridge_start,
-            im_bridge_stop,
-            im_bridge_status,
-            im_bridge_connect_feishu,
+            // Platform Bridge (Feishu + multi-CLI adapter)
+            platform_get_config,
+            platform_save_config,
+            platform_get_agent_config,
+            platform_save_agent_config,
+            platform_start,
+            platform_stop,
+            platform_status,
+            platform_connect_feishu,
+            platform_get_openclaw_status,
+            platform_openclaw_start,
+            platform_openclaw_stop,
+            platform_openclaw_restart,
+            platform_list_openclaw_sessions,
+            platform_get_openclaw_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

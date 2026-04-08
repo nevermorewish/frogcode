@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IM Bridge 多 CLI 适配层设计</title>
+<style>
+:root{--bg:#0a0e17;--bg2:#111827;--bg3:#1a2332;--bg4:#243044;--border:#2a3a4e;--text:#e2e8f0;--text2:#8899aa;--text3:#556677;--blue:#60a5fa;--cyan:#22d3ee;--green:#34d399;--orange:#fb923c;--red:#f87171;--purple:#a78bfa;--pink:#f472b6;--yellow:#fbbf24}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.7}
+.hero{padding:50px 24px 40px;text-align:center;background:linear-gradient(180deg,#0f1729 0%,var(--bg) 100%)}
+.hero h1{font-size:2.4em;font-weight:800;background:linear-gradient(135deg,var(--blue),var(--purple),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px}
+.hero .sub{color:var(--text2);font-size:1em;max-width:760px;margin:0 auto 20px}
+.hero .badges{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.badge{padding:5px 14px;border-radius:20px;font-size:0.82em;font-weight:600;border:1px solid}
+.b1{border-color:rgba(96,165,250,0.4);color:var(--blue);background:rgba(96,165,250,0.1)}
+.b2{border-color:rgba(167,139,250,0.4);color:var(--purple);background:rgba(167,139,250,0.1)}
+.b3{border-color:rgba(52,211,153,0.4);color:var(--green);background:rgba(52,211,153,0.1)}
+.b4{border-color:rgba(251,146,60,0.4);color:var(--orange);background:rgba(251,146,60,0.1)}
+
+.nav{position:sticky;top:0;z-index:100;background:rgba(10,14,23,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);padding:0 24px}
+.nav-inner{max-width:1280px;margin:0 auto;display:flex;gap:2px;overflow-x:auto;padding:8px 0}
+.nav a{color:var(--text2);text-decoration:none;padding:6px 14px;border-radius:6px;font-size:0.83em;white-space:nowrap;transition:all 0.2s}
+.nav a:hover{background:var(--bg3);color:var(--text)}
+
+.container{max-width:1280px;margin:0 auto;padding:36px 24px}
+section{margin-bottom:54px}
+h2{font-size:1.55em;font-weight:700;margin-bottom:22px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+h2 .n{color:var(--blue);margin-right:8px}
+h3{font-size:1.1em;font-weight:600;margin:22px 0 12px;color:var(--text)}
+h4{font-size:0.98em;font-weight:600;margin:16px 0 8px;color:var(--cyan)}
+p,li{color:var(--text2);font-size:0.92em}
+ul{padding-left:20px;margin:8px 0}
+li{margin:4px 0}
+li strong,p strong{color:var(--text)}
+code{background:var(--bg3);padding:2px 7px;border-radius:4px;font-size:0.88em;color:var(--cyan);font-family:'Fira Code',Consolas,monospace}
+
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;margin:14px 0}
+.card.accent{border-left:3px solid var(--blue)}
+.card.warn{border-left:3px solid var(--orange)}
+.card.ok{border-left:3px solid var(--green)}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
+
+pre{background:#060a12;border:1px solid var(--border);border-radius:8px;padding:16px 18px;overflow-x:auto;font-family:'Fira Code',Consolas,monospace;font-size:0.84em;line-height:1.55;color:#d8dee9;margin:12px 0}
+pre .k{color:#c792ea}pre .s{color:#c3e88d}pre .c{color:#546e7a;font-style:italic}pre .n{color:#f07178}pre .t{color:#82aaff}pre .f{color:#ffcb6b}
+
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:0.88em}
+th{background:var(--bg3);color:var(--text);text-align:left;padding:10px 12px;font-weight:600;border:1px solid var(--border)}
+td{padding:9px 12px;border:1px solid var(--border);color:var(--text2);vertical-align:top}
+td code{font-size:0.85em}
+tr:nth-child(even) td{background:rgba(255,255,255,0.015)}
+
+.diagram{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px;overflow-x:auto;margin:16px 0}
+.flow{display:flex;flex-direction:column;gap:10px;align-items:center;font-family:'Fira Code',Consolas,monospace;font-size:0.84em}
+.node{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 18px;min-width:260px;text-align:center}
+.node.c1{border-color:var(--blue);background:rgba(96,165,250,0.07)}
+.node.c2{border-color:var(--orange);background:rgba(251,146,60,0.07)}
+.node.c3{border-color:var(--green);background:rgba(52,211,153,0.07)}
+.node.c4{border-color:var(--purple);background:rgba(167,139,250,0.07)}
+.node .t{font-weight:700;color:var(--text);font-size:0.95em;margin-bottom:3px}
+.node .d{color:var(--text2);font-size:0.78em}
+.arrow{color:var(--text3);font-size:1.1em}
+.row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+
+.tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:0.74em;font-weight:600;margin-right:6px}
+.tag-new{background:rgba(52,211,153,0.15);color:var(--green);border:1px solid rgba(52,211,153,0.3)}
+.tag-edit{background:rgba(96,165,250,0.15);color:var(--blue);border:1px solid rgba(96,165,250,0.3)}
+.tag-del{background:rgba(248,113,113,0.15);color:var(--red);border:1px solid rgba(248,113,113,0.3)}
+.tag-keep{background:rgba(136,153,170,0.15);color:var(--text2);border:1px solid var(--border)}
+
+ol.steps{list-style:none;padding:0;counter-reset:s}
+ol.steps li{counter-increment:s;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px 18px 14px 52px;margin:10px 0;position:relative}
+ol.steps li::before{content:counter(s);position:absolute;left:14px;top:14px;width:26px;height:26px;background:var(--blue);color:var(--bg);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.85em}
+ol.steps li strong{color:var(--text);display:block;margin-bottom:4px}
+
+.qbox{background:rgba(251,146,60,0.06);border:1px solid rgba(251,146,60,0.3);border-radius:8px;padding:16px 20px;margin:12px 0}
+.qbox h4{color:var(--orange);margin-top:0}
+.qbox ol{padding-left:22px;color:var(--text2)}
+.qbox ol li{margin:6px 0}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>IM Bridge 多 CLI 适配层设计</h1>
+  <p class="sub">将 frogcode 现有 <code>im-bridge</code> sidecar 扩展为多 CLI 适配层 —— 一套飞书通道，动态切换 Claude Code / OpenClaw 等后端。借鉴 cc-connect 的 Agent 接口模式。</p>
+  <div class="badges">
+    <span class="badge b1">Node Sidecar</span>
+    <span class="badge b2">Feishu</span>
+    <span class="badge b3">Claude Code</span>
+    <span class="badge b4">OpenClaw</span>
+  </div>
+</div>
+
+<div class="nav"><div class="nav-inner">
+  <a href="#bg">背景</a>
+  <a href="#arch">架构对比</a>
+  <a href="#agent">Agent 接口</a>
+  <a href="#layout">文件布局</a>
+  <a href="#flow">消息流</a>
+  <a href="#config">配置</a>
+  <a href="#plan">迁移步骤</a>
+  <a href="#ref">参考映射</a>
+  <a href="#cards">流式卡片</a>
+  <a href="#multi">多实例</a>
+  <a href="#q">设计决策</a>
+</div></div>
+
+<div class="container">
+
+<section id="bg">
+<h2><span class="n">1.</span>背景与目标</h2>
+
+<div class="grid3">
+  <div class="card">
+    <h3 style="margin-top:0">frogcode 现状</h3>
+    <p>Node sidecar 接收飞书消息后，通过 SSE <code>execute</code> 事件通知 Rust；Rust 端 <code>execute_claude_for_chat()</code> 直接 spawn <code>claude</code> CLI，解析 stream-json，HTTP 回调 sidecar 更新卡片。</p>
+    <p><strong>问题</strong>：协议逻辑散在 Rust，只支持 Claude Code 一种 CLI，加新后端要写 Rust。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">nexu 的 OpenClaw 控制</h3>
+    <p>TypeScript 实现：<code>openclaw-process.ts</code>（进程管理）+ <code>openclaw-ws-client.ts</code>（JSON-RPC v3 + Ed25519 握手）+ 配置编译器，约 1500+ 行 TS 代码。</p>
+    <p><strong>启示</strong>：openclaw 本身就是 npm 包，用 TS 控制最自然，可直接搬运。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">cc-connect 的 Agent 抽象</h3>
+    <p>Go 项目用统一 <code>Agent</code> 接口抽象 Claude Code / Codex / Cursor / Gemini，每个 CLI 一个实现。项目级路由：<code>agent.type = "claudecode"</code>。</p>
+    <p><strong>启示</strong>：接口驱动的多 CLI 适配是已验证的模式。</p>
+  </div>
+</div>
+
+<div class="card accent">
+  <h3 style="margin-top:0">本次目标</h3>
+  <ul>
+    <li><strong>复用 im-bridge</strong>，不新建 openclaw-bridge（避免两套 Feishu SDK 冲突）</li>
+    <li>在 Node sidecar 内引入 <strong>cc-connect 式 Agent 接口</strong>，把 Claude 执行从 Rust 搬进 sidecar</li>
+    <li>新增 <strong>OpenClaw adapter</strong>，直接复用 nexu 的 TS 代码</li>
+    <li><strong>openclaw 不打包</strong>：运行时 PATH 查找 / npx / 用户配置路径</li>
+    <li><strong>Rust 层变薄</strong>：只做 sidecar 生命周期 + 配置读写 + SSE 转发，删除 ~300 行执行逻辑</li>
+    <li>未来加 Codex / Gemini <strong>零 Rust 改动</strong></li>
+  </ul>
+</div>
+</section>
+
+<section id="arch">
+<h2><span class="n">2.</span>架构对比</h2>
+
+<div class="grid2">
+  <div>
+    <h3>现状</h3>
+    <div class="diagram">
+      <div class="flow">
+        <div class="node c2"><div class="t">Feishu WS</div></div>
+        <div class="arrow">↓</div>
+        <div class="node c1"><div class="t">Node sidecar</div><div class="d">receive → emit execute SSE</div></div>
+        <div class="arrow">↓ SSE</div>
+        <div class="node c3"><div class="t">Rust im_bridge.rs</div><div class="d">spawn claude CLI<br>parse stream-json (300 行)</div></div>
+        <div class="arrow">↓ HTTP /feishu-card</div>
+        <div class="node c1"><div class="t">Node sidecar</div><div class="d">buildCard → Feishu API</div></div>
+      </div>
+    </div>
+    <p style="text-align:center;color:var(--red);font-size:0.85em">❌ 协议逻辑在 Rust，耦合 Claude Code</p>
+  </div>
+
+  <div>
+    <h3>目标</h3>
+    <div class="diagram">
+      <div class="flow">
+        <div class="node c2"><div class="t">Feishu WS</div></div>
+        <div class="arrow">↓</div>
+        <div class="node c1"><div class="t">Node sidecar</div><div class="d">AgentManager.handle()</div></div>
+        <div class="arrow">↓</div>
+        <div class="row">
+          <div class="node c3"><div class="t">ClaudeCodeAgent</div><div class="d">spawn claude<br>stream-json</div></div>
+          <div class="node c4"><div class="t">OpenClawAgent</div><div class="d">spawn openclaw<br>WS JSON-RPC v3</div></div>
+        </div>
+        <div class="arrow">↓ AgentEvent</div>
+        <div class="node c1"><div class="t">CardRenderer</div><div class="d">→ Feishu API</div></div>
+      </div>
+    </div>
+    <p style="text-align:center;color:var(--green);font-size:0.85em">✅ 协议逻辑归一，Rust 只管进程生命周期</p>
+  </div>
+</div>
+
+<div class="card warn">
+  <h4 style="margin-top:0">Rust 层职责缩减</h4>
+  <ul>
+    <li><span class="tag tag-keep">保留</span> spawn/kill Node sidecar（与现有一致）</li>
+    <li><span class="tag tag-keep">保留</span> <code>im_bridge_get_config</code> / <code>im_bridge_save_config</code> / <code>im_bridge_status</code></li>
+    <li><span class="tag tag-keep">保留</span> SSE listener 转发 <code>im-bridge:status</code> / <code>im-bridge:log</code> 到前端</li>
+    <li><span class="tag tag-del">删除</span> <code>execute_claude_for_chat()</code> 及 <code>CardState</code> / <code>post_card_to_sidecar()</code>（约 300 行）</li>
+    <li><span class="tag tag-del">删除</span> SSE <code>execute</code> 事件分支 (<code>im_bridge.rs:246-274</code>)</li>
+  </ul>
+  <p style="margin-top:10px"><strong>im_bridge.rs 从 846 行缩减到 ~350 行。</strong></p>
+</div>
+</section>
+
+<section id="agent">
+<h2><span class="n">3.</span>Agent 接口（照搬 cc-connect）</h2>
+
+<p>在 <code>src-tauri/sidecar/im-bridge/src/agents/types.ts</code> 定义统一接口：</p>
+
+<pre><span class="c">// src/agents/types.ts</span>
+<span class="k">export interface</span> <span class="t">Agent</span> {
+  <span class="f">name</span>: <span class="s">'claudecode'</span> | <span class="s">'openclaw'</span>;
+  <span class="f">startSession</span>(opts: <span class="t">StartSessionOpts</span>): <span class="t">Promise</span>&lt;<span class="t">AgentSession</span>&gt;;
+  <span class="f">stop</span>(): <span class="t">Promise</span>&lt;<span class="k">void</span>&gt;;
+}
+
+<span class="k">export interface</span> <span class="t">AgentSession</span> {
+  <span class="f">send</span>(prompt: <span class="k">string</span>, files?: <span class="k">string</span>[]): <span class="t">Promise</span>&lt;<span class="k">void</span>&gt;;
+  <span class="f">events</span>(): <span class="t">EventEmitter</span>;      <span class="c">// 或 AsyncIterable&lt;AgentEvent&gt;</span>
+  <span class="f">cancel</span>(): <span class="t">Promise</span>&lt;<span class="k">void</span>&gt;;
+  <span class="f">currentSessionId</span>(): <span class="k">string</span> | <span class="k">null</span>;
+  <span class="f">close</span>(): <span class="t">Promise</span>&lt;<span class="k">void</span>&gt;;
+}
+
+<span class="k">export type</span> <span class="t">AgentEvent</span> =
+  | { <span class="f">type</span>: <span class="s">'system'</span>; model?: <span class="k">string</span> }
+  | { <span class="f">type</span>: <span class="s">'text'</span>; delta: <span class="k">string</span> }
+  | { <span class="f">type</span>: <span class="s">'tool_use'</span>; name: <span class="k">string</span>; detail: <span class="k">string</span> }
+  | { <span class="f">type</span>: <span class="s">'tool_result'</span>; ok: <span class="k">boolean</span> }
+  | { <span class="f">type</span>: <span class="s">'result'</span>; costUsd?: <span class="k">number</span>; durationMs?: <span class="k">number</span>;
+       totalTokens?: <span class="k">number</span>; contextWindow?: <span class="k">number</span>; error?: <span class="k">string</span> }
+  | { <span class="f">type</span>: <span class="s">'session'</span>; sessionId: <span class="k">string</span> };</pre>
+
+<p><strong>关键点</strong>：所有 UI 层（卡片渲染、stats、工具列表）只消费 <code>AgentEvent</code>，不再关心底下是哪个 CLI。</p>
+
+<h3>两个适配器</h3>
+
+<table>
+<tr><th style="width:25%">适配器</th><th>实现要点</th><th>来源</th></tr>
+<tr>
+  <td><strong>ClaudeCodeAgent</strong></td>
+  <td><code>spawn('claude', ['--resume', sid?, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '-p', prompt])</code>，逐行解析 stream-json，归一化成 <code>AgentEvent</code></td>
+  <td>把 <code>im_bridge.rs:363-628</code> 的 JSONL 解析逻辑翻译成 TS（约 100 行）</td>
+</tr>
+<tr>
+  <td><strong>OpenClawAgent</strong></td>
+  <td><code>spawn openclaw gateway run</code>（或用户配置的 <code>openclawBin</code>），启动后 WebSocket JSON-RPC 连接，Ed25519 握手，<code>send()</code> → <code>ws.request('session.message', ...)</code>，WS 事件归一化为 <code>AgentEvent</code></td>
+  <td>从 nexu 复制 <code>openclaw-process.ts</code> / <code>openclaw-ws-client.ts</code> / device identity / config compiler</td>
+</tr>
+</table>
+
+<div class="card warn">
+  <h4 style="margin-top:0">OpenClaw 不打包</h4>
+  <p>sidecar 按以下顺序查找 openclaw 二进制：</p>
+  <ol style="padding-left:22px">
+    <li>配置里显式路径 <code>agents.openclaw.binPath</code></li>
+    <li><code>PATH</code> 里的 <code>openclaw</code></li>
+    <li><code>npx openclaw</code></li>
+    <li>找不到 → emit <code>status</code> 事件 <code>{openclawAvailable: false}</code>，前端提示用户安装</li>
+  </ol>
+</div>
+</section>
+
+<section id="layout">
+<h2><span class="n">4.</span>文件布局</h2>
+
+<pre>src-tauri/sidecar/im-bridge/
+├── package.json                   <span class="c"># + ws, tweetnacl (--external:openclaw)</span>
+└── src/
+    ├── index.ts                   <span class="c"># 精简：Feishu receive → agentManager.handle()</span>
+    ├── card-renderer.ts           <span class="c"># 抽离现有 buildCard()，订阅 AgentEvent</span>
+    ├── agents/
+    │   ├── types.ts               <span class="c"># Agent / AgentSession / AgentEvent</span>
+    │   ├── manager.ts             <span class="c"># AgentManager：按 chatId 维护 AgentSession</span>
+    │   ├── claudecode.ts          <span class="c"># ClaudeCodeAgent (从 Rust 翻译)</span>
+    │   ├── normalizer.ts          <span class="c"># 通用归一化工具</span>
+    │   └── openclaw/
+    │       ├── index.ts           <span class="c"># OpenClawAgent</span>
+    │       ├── process.ts         <span class="c"># ← nexu/openclaw-process.ts</span>
+    │       ├── ws-client.ts       <span class="c"># ← nexu/openclaw-ws-client.ts</span>
+    │       ├── device.ts          <span class="c"># Ed25519 设备身份</span>
+    │       └── config.ts          <span class="c"># 配置编译/写入</span>
+
+src-tauri/src/commands/
+└── im_bridge.rs                   <span class="c"># 846 → ~350 行</span></pre>
+
+<div class="grid2" style="margin-top:18px">
+  <div>
+    <h4>新增文件</h4>
+    <ul>
+      <li><span class="tag tag-new">NEW</span> <code>agents/types.ts</code></li>
+      <li><span class="tag tag-new">NEW</span> <code>agents/manager.ts</code></li>
+      <li><span class="tag tag-new">NEW</span> <code>agents/claudecode.ts</code></li>
+      <li><span class="tag tag-new">NEW</span> <code>agents/normalizer.ts</code></li>
+      <li><span class="tag tag-new">NEW</span> <code>agents/openclaw/*</code> (5 文件)</li>
+      <li><span class="tag tag-new">NEW</span> <code>card-renderer.ts</code></li>
+    </ul>
+  </div>
+  <div>
+    <h4>修改 / 删除</h4>
+    <ul>
+      <li><span class="tag tag-edit">EDIT</span> <code>sidecar/src/index.ts</code> — 去掉 execute SSE，改调 agentManager</li>
+      <li><span class="tag tag-edit">EDIT</span> <code>sidecar/package.json</code> — +<code>ws</code> +<code>tweetnacl</code></li>
+      <li><span class="tag tag-del">DEL</span> <code>im_bridge.rs</code> — <code>execute_claude_for_chat</code>、<code>CardState</code>、<code>post_card_to_sidecar</code></li>
+      <li><span class="tag tag-del">DEL</span> SSE execute 分支 (246–274)</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<section id="flow">
+<h2><span class="n">5.</span>消息流（新版）</h2>
+
+<pre><span class="n">1.</span> Feishu WS → sidecar dispatcher.receive_v1
+
+<span class="n">2.</span> sidecar: agentManager.handle(chatId, text, files)
+     ├─ 若 chat 无活动 session → agentManager 按配置 new Agent(...)
+     │    → agent.startSession({ cwd, sessionId: loadSession(chatId) })
+     └─ session.send(text, files)
+
+<span class="n">3.</span> 循环 for evt of session.events():
+     ├─ cardRenderer.update(chatId, evt)    <span class="c">// 节流 300ms</span>
+     │    → larkClient.im.v1.message.patch  <span class="c">// 更新卡片</span>
+     └─ if evt.type === 'session' → saveSession(chatId, sessionId)
+
+<span class="n">4.</span> evt.type === 'result' → 最终卡片 + 摘除 typing reaction</pre>
+
+<div class="card ok">
+  <p><strong>Rust 完全不参与消息处理</strong>。只做以下事：</p>
+  <ul>
+    <li><code>im_bridge_start</code> → spawn node sidecar</li>
+    <li><code>im_bridge_stop</code> → kill</li>
+    <li><code>im_bridge_get/save_config</code> → 读写 <code>~/.anycode/im-config.json</code></li>
+    <li><code>im_bridge_status</code> → 询问 sidecar <code>/health</code></li>
+    <li>SSE 转发 <code>im-bridge:*</code> 到前端</li>
+  </ul>
+</div>
+</section>
+
+<section id="config">
+<h2><span class="n">6.</span>配置扩展</h2>
+
+<pre><span class="c">// ~/.anycode/im-config.json</span>
+{
+  <span class="f">"appId"</span>: <span class="s">"..."</span>,
+  <span class="f">"appSecret"</span>: <span class="s">"..."</span>,
+  <span class="f">"projectPath"</span>: <span class="s">"D:/code/demo"</span>,
+  <span class="f">"enabled"</span>: <span class="k">true</span>,
+
+  <span class="c">// 新增字段</span>
+  <span class="f">"agentType"</span>: <span class="s">"claudecode"</span>,      <span class="c">// "claudecode" | "openclaw"</span>
+  <span class="f">"agents"</span>: {
+    <span class="f">"claudecode"</span>: {
+      <span class="f">"binPath"</span>: <span class="k">null</span>,             <span class="c">// null = auto-detect</span>
+      <span class="f">"extraArgs"</span>: [],
+      <span class="f">"mode"</span>: <span class="s">"default"</span>             <span class="c">// default | acceptEdits | plan | bypassPermissions</span>
+    },
+    <span class="f">"openclaw"</span>: {
+      <span class="f">"binPath"</span>: <span class="k">null</span>,             <span class="c">// null = which openclaw / npx</span>
+      <span class="f">"stateDir"</span>: <span class="s">"~/.anycode/openclaw"</span>,
+      <span class="f">"gatewayToken"</span>: <span class="k">null</span>
+    }
+  }
+}</pre>
+
+<p>前端飞书配置页加一个下拉：<strong>「使用的 CLI：Claude Code / OpenClaw」</strong>。未来加 Codex/Gemini：</p>
+<ol style="padding-left:22px">
+  <li>新建 <code>agents/codex.ts</code> 实现 <code>Agent</code> 接口</li>
+  <li>配置 <code>agentType</code> 加一个枚举值</li>
+  <li><strong>无需动 Rust，无需动 card-renderer，无需动 Feishu 事件处理</strong></li>
+</ol>
+</section>
+
+<section id="plan">
+<h2><span class="n">7.</span>迁移步骤</h2>
+
+<p>按"先零回归、再加新功能"的顺序推进：</p>
+
+<ol class="steps">
+<li>
+  <strong>抽离基础设施（无功能变化）</strong>
+  sidecar 新建 <code>agents/types.ts</code>、<code>agents/normalizer.ts</code>、<code>card-renderer.ts</code>（从 <code>index.ts</code> 抽出 <code>buildCard</code>）。
+  <br><em>校验：TS 编译通过</em>
+</li>
+<li>
+  <strong>实现 ClaudeCodeAgent</strong>
+  把 <code>im_bridge.rs:363-628</code> 的 spawn + JSONL 解析翻译成 TS，归一化为 <code>AgentEvent</code>。
+  <br><em>校验：独立测试 <code>new ClaudeCodeAgent().startSession().send('hi')</code> 能看到 AgentEvent 流</em>
+</li>
+<li>
+  <strong>接入 AgentManager</strong>
+  sidecar <code>index.ts</code>：Feishu receive 不再 <code>bus.emit('execute')</code>，改走 <code>agentManager.handle()</code>，内部订阅 events 驱动 <code>card-renderer</code>。
+  <br><em>校验：端到端飞书对话行为与改造前一致（零回归）</em>
+</li>
+<li>
+  <strong>清理 Rust 层</strong>
+  删除 <code>execute_claude_for_chat()</code>、<code>CardState</code>、<code>post_card_to_sidecar()</code>、SSE execute 分支。
+  <br><em>校验：Rust 编译通过，<code>im_bridge.rs</code> 缩减约 300 行</em>
+</li>
+<li>
+  <strong>移植 OpenClaw 控制代码</strong>
+  sidecar 新建 <code>agents/openclaw/</code>：从 nexu 复制 process manager + WS client + device identity + config compiler。
+  <br><em>校验：独立 smoke — sidecar 能拉起本地 <code>openclaw gateway run</code> 并完成 WS 握手</em>
+</li>
+<li>
+  <strong>实现 OpenClawAgent</strong>
+  把 WS JSON-RPC 事件流归一化为 <code>AgentEvent</code>，实现 <code>Agent</code> 接口注册到 manager。
+  <br><em>校验：切 <code>agentType:"openclaw"</code> 后飞书对话正常</em>
+</li>
+<li>
+  <strong>前端切换 UI</strong>
+  在飞书配置页加 agent 选择下拉，热切换后 sidecar 重启 / 重新 init。
+  <br><em>校验：UI 可切换 CLI，立即生效</em>
+</li>
+<li>
+  <strong>打包脚本</strong>
+  <code>esbuild --external:openclaw</code> 确保 openclaw 不进 bundle；<code>ws</code> / <code>tweetnacl</code> 正常打包。
+  <br><em>校验：bundle 体积不膨胀，release 构建产物正常</em>
+</li>
+</ol>
+</section>
+
+<section id="ref">
+<h2><span class="n">8.</span>cc-connect 对照</h2>
+
+<table>
+<tr><th>cc-connect (Go)</th><th>本设计 (TS in sidecar)</th><th>作用</th></tr>
+<tr><td><code>core/interfaces.go</code> <strong>Agent</strong></td><td><code>agents/types.ts</code></td><td>CLI 后端抽象</td></tr>
+<tr><td><code>core/interfaces.go</code> <strong>Platform</strong></td><td>sidecar <code>index.ts</code> 内 Feishu 收发</td><td>IM 通道抽象（第一版只 Feishu）</td></tr>
+<tr><td><code>core/engine.go</code> SessionManager</td><td><code>agents/manager.ts</code></td><td>会话路由</td></tr>
+<tr><td><code>platform/feishu/card.go</code></td><td><code>card-renderer.ts</code></td><td>卡片渲染</td></tr>
+<tr><td><code>agent/claudecode/session.go</code></td><td><code>agents/claudecode.ts</code></td><td>Claude 适配</td></tr>
+<tr><td><code>agent/codex/session.go</code> 等</td><td>（未来）<code>agents/codex.ts</code></td><td>其他 CLI</td></tr>
+<tr><td><code>config.projects[].agent.type</code></td><td><code>im-config.json: agentType</code></td><td>类型选择</td></tr>
+<tr><td><code>core.RegisterAgent(...)</code></td><td><code>manager.ts</code> 工厂 switch</td><td>注册</td></tr>
+</table>
+
+<div class="card accent" style="margin-top:14px">
+  <p><strong>im-bridge ≈ cc-connect 的 <code>platform/feishu</code> + <code>core/engine</code>（Feishu-only 版本）</strong>。cc-connect 把 <code>Agent</code>（CLI 后端）和 <code>Platform</code>（IM 通道）作为两套正交抽象，本次我们只引入 <code>Agent</code>；未来加钉钉/Slack 时再把 <code>Platform</code> 也抽出来。</p>
+</div>
+</section>
+
+<section id="cards">
+<h2><span class="n">9.</span>流式卡片：Rust → TS 迁移</h2>
+
+<p><strong>Rust 端全删，但状态机不消失</strong> —— thinking → running → complete 三段式、300ms 节流、stats 累积，全部换地方：</p>
+
+<table>
+<tr><th>能力</th><th>原位置（Rust）</th><th>新位置（TS in sidecar）</th></tr>
+<tr>
+  <td>卡片状态结构</td>
+  <td><code>CardState</code> struct (<code>im_bridge.rs:304-330</code>)</td>
+  <td><code>card-renderer.ts</code> 内的 state 类型</td>
+</tr>
+<tr>
+  <td>卡片内容推送</td>
+  <td><code>post_card_to_sidecar()</code> HTTP 调用</td>
+  <td>直接 <code>larkClient.im.v1.message.patch()</code>（本来就在 sidecar 里）</td>
+</tr>
+<tr>
+  <td>stream-json 解析</td>
+  <td>Rust JSONL parse → CardState 更新（~250 行）</td>
+  <td><code>ClaudeCodeAgent</code> 产出 <code>AgentEvent</code>，<code>card-renderer</code> 订阅</td>
+</tr>
+<tr>
+  <td>300ms 节流</td>
+  <td>Rust <code>update_interval</code> tick 循环</td>
+  <td><code>card-renderer.ts</code> 内部 debounce</td>
+</tr>
+<tr>
+  <td>sidecar HTTP 端点 <code>POST /feishu-card</code></td>
+  <td>被 Rust 回调</td>
+  <td><span class="tag tag-del">删除</span>（跨进程调用变成同进程函数调用）</td>
+</tr>
+</table>
+
+<div class="card ok">
+  <p><strong>用户感知：行为完全一致</strong>。只是代码从 <code>Rust spawn → JSONL → HTTP 回调 sidecar → Feishu API</code> 简化为 <code>TS agent → AgentEvent → 直接 Feishu API</code>。少一跳 HTTP，少一份 struct 定义，少一个端点。</p>
+</div>
+</section>
+
+<section id="multi">
+<h2><span class="n">10.</span>多飞书 × 多 CLI？第一版不做</h2>
+
+<p>参考 cc-connect 的约束：</p>
+<ul>
+  <li><strong>cc-connect 一个 Project = 一个 Agent</strong>（<code>core/engine.go:133</code>：Engine 只持有一个 agent 实例）</li>
+  <li>想要 2 个飞书机器人接不同 CLI，cc-connect 必须配 2 个 Project，每个用不同 <code>appId</code></li>
+  <li>同一个 <code>appId</code> 的 WS 连接会互踢 —— 飞书层面的物理限制</li>
+</ul>
+
+<div class="card warn">
+  <h4 style="margin-top:0">第一版约束：单实例</h4>
+  <p><strong>一个 frogcode = 一个 im-bridge sidecar = 一个飞书 app = 一个 <code>agentType</code></strong>。与 cc-connect 单 project 完全对等，不做多实例。</p>
+</div>
+
+<p>未来若需要"同时跑两个飞书机器人接不同 CLI"，有两条路径可选：</p>
+
+<table>
+<tr><th>方案</th><th>做法</th><th>复杂度</th></tr>
+<tr>
+  <td><strong>A. 多 sidecar 实例</strong></td>
+  <td>Rust 端持有 <code>Vec&lt;ImBridgeInner&gt;</code>，启动 N 个 sidecar 进程，每个独立端口/配置。对齐 cc-connect 多 Project 模式</td>
+  <td>中</td>
+</tr>
+<tr>
+  <td><strong>B. sidecar 内多 Engine</strong></td>
+  <td>单 sidecar 进程内跑多组 <code>{feishuApp + agent}</code>，共享 Node 进程与 lark SDK</td>
+  <td>低（纯 TS 改动）</td>
+</tr>
+</table>
+
+<p><strong>第一版先不支持任何一种</strong>，待有明确用户场景后再加（建议走 B）。</p>
+</section>
+
+<section id="q">
+<h2><span class="n">11.</span>设计决策（已定）</h2>
+
+<table>
+<tr><th style="width:22%">议题</th><th style="width:30%">决策</th><th>说明</th></tr>
+<tr>
+  <td><strong>Session 映射</strong></td>
+  <td><code>platform:channelId:userId</code> 三段式 key</td>
+  <td>对齐 cc-connect <code>core/message.go:131</code>；同一用户在不同 chat 的会话互不干扰；群聊中不同用户各自独立上下文</td>
+</tr>
+<tr>
+  <td><strong>OpenClaw 启动方式</strong></td>
+  <td>sidecar 启动时<strong>长驻拉起一个 gateway</strong></td>
+  <td>多 chat 共享一个 openclaw gateway 进程；减少冷启动；WS 连接复用</td>
+</tr>
+<tr>
+  <td><strong>OpenClaw 未安装</strong></td>
+  <td><strong>直接报错</strong>，前端提示用户安装</td>
+  <td>不做隐式降级，避免用户配了 openclaw 却默默走 claudecode 导致行为不一致</td>
+</tr>
+<tr>
+  <td><strong>配置存放</strong></td>
+  <td><strong>Rust 管写入</strong>；配置文件<strong>拆开</strong></td>
+  <td>
+    <code>~/.anycode/im-config.json</code> — 飞书 + agentType（基础）<br>
+    <code>~/.anycode/agents/claudecode.json</code> — Claude Code 专属<br>
+    <code>~/.anycode/agents/openclaw.json</code> — OpenClaw 专属（binPath、stateDir 等）<br>
+    <code>~/.anycode/openclaw/</code> — openclaw runtime 状态（identity、sessions、device-auth），仿 nexu
+  </td>
+</tr>
+<tr>
+  <td><strong>多飞书 × 多 CLI</strong></td>
+  <td>第一版<strong>不支持</strong></td>
+  <td>单 sidecar = 单 feishu app = 单 agentType，与 cc-connect 单 project 对等</td>
+</tr>
+<tr>
+  <td><strong>CardState / 流式卡片</strong></td>
+  <td>Rust 端删除，<strong>逻辑迁移到</strong> <code>card-renderer.ts</code></td>
+  <td>状态机、300ms 节流、stats 累积、<code>/feishu-card</code> 端点全部下沉到 sidecar</td>
+</tr>
+</table>
+
+<h3 style="margin-top:28px">配置文件示例</h3>
+
+<pre><span class="c">// ~/.anycode/im-config.json  — 基础配置</span>
+{
+  <span class="f">"appId"</span>: <span class="s">"cli_xxx"</span>,
+  <span class="f">"appSecret"</span>: <span class="s">"..."</span>,
+  <span class="f">"projectPath"</span>: <span class="s">"D:/code/demo"</span>,
+  <span class="f">"enabled"</span>: <span class="k">true</span>,
+  <span class="f">"agentType"</span>: <span class="s">"claudecode"</span>     <span class="c">// 切 CLI 就改这里</span>
+}
+
+<span class="c">// ~/.anycode/agents/claudecode.json</span>
+{
+  <span class="f">"binPath"</span>: <span class="k">null</span>,
+  <span class="f">"extraArgs"</span>: [],
+  <span class="f">"mode"</span>: <span class="s">"default"</span>
+}
+
+<span class="c">// ~/.anycode/agents/openclaw.json</span>
+{
+  <span class="f">"binPath"</span>: <span class="k">null</span>,            <span class="c">// null → PATH / npx 查找，找不到报错</span>
+  <span class="f">"stateDir"</span>: <span class="s">"~/.anycode/openclaw"</span>,
+  <span class="f">"gatewayToken"</span>: <span class="k">null</span>
+}</pre>
+
+<div class="card ok">
+  <p><strong>可以开始编码</strong>。按步骤 1-4 先把 Claude Code 适配器跑通（零回归），再做 5-6 加 OpenClaw，最后 7-8 前端 UI + 打包脚本。</p>
+</div>
+</section>
+
+</div>
+
+</body>
+</html>

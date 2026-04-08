@@ -1,8 +1,8 @@
 /**
- * Feishu Setup Dialog — Nexu-style simple credential form
+ * Feishu Setup Dialog — config credentials + CLI backend selector
  */
 import React, { useEffect, useState } from 'react';
-import { ExternalLink, Loader2, AlertCircle } from 'lucide-react';
+import { ExternalLink, Loader2, AlertCircle, ChevronDown, Terminal, Cpu } from 'lucide-react';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 import {
   Dialog,
@@ -17,6 +17,23 @@ import { useTranslation } from 'react-i18next';
 
 const FEISHU_CREDENTIALS_URL = 'https://open.feishu.cn/app';
 const FEISHU_TUTORIAL_URL = 'https://open.feishu.cn/document/home/introduction-to-custom-app-development/self-built-application-development-process';
+
+type AgentType = 'claudecode' | 'openclaw';
+
+const AGENT_OPTIONS: { value: AgentType; label: string; icon: React.ReactNode; desc: string }[] = [
+  {
+    value: 'claudecode',
+    label: 'Claude Code',
+    icon: <Terminal className="h-3.5 w-3.5" />,
+    desc: 'Anthropic Claude Code CLI',
+  },
+  {
+    value: 'openclaw',
+    label: 'OpenClaw',
+    icon: <Cpu className="h-3.5 w-3.5" />,
+    desc: 'OpenClaw Gateway (multi-channel)',
+  },
+];
 
 const FeishuIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg className={className} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -40,17 +57,33 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   const [projectPath, setProjectPath] = useState('');
+  const [agentType, setAgentType] = useState<AgentType>('claudecode');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
+
+  // OpenClaw-specific config
+  const [ocBinPath, setOcBinPath] = useState('');
+  const [ocGatewayPort, setOcGatewayPort] = useState('18789');
 
   useEffect(() => {
     if (!open) return;
-    api.imBridge
+    // Load platform config
+    api.platform
       .getConfig()
       .then((cfg) => {
         setAppId(cfg.appId || '');
         setAppSecret(cfg.appSecret || '');
         setProjectPath(cfg.projectPath || '');
+        setAgentType((cfg.agentType as AgentType) || 'claudecode');
+      })
+      .catch(() => {});
+    // Load openclaw agent config
+    api.platform
+      .getAgentConfig('openclaw')
+      .then((cfg) => {
+        setOcBinPath(cfg.binPath || '');
+        setOcGatewayPort(String(cfg.gatewayPort || 18789));
       })
       .catch(() => {});
   }, [open]);
@@ -63,16 +96,30 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
     }
     setSaving(true);
     try {
-      await api.imBridge.saveConfig({
+      // Save platform config with agentType
+      await api.platform.saveConfig({
         appId: appId.trim(),
         appSecret: appSecret.trim(),
         projectPath: projectPath.trim(),
         enabled: true,
+        agentType,
       });
-      try { await api.imBridge.stop(); } catch {}
-      const result = await api.imBridge.start();
+
+      // Save per-agent config if openclaw
+      if (agentType === 'openclaw') {
+        await api.platform.saveAgentConfig('openclaw', {
+          binPath: ocBinPath.trim() || null,
+          stateDir: null,
+          gatewayPort: parseInt(ocGatewayPort, 10) || 18789,
+          gatewayToken: null,
+        });
+      }
+
+      // Restart sidecar
+      try { await api.platform.stop(); } catch {}
+      const result = await api.platform.start();
       if (result.status === 'running') {
-        try { await api.imBridge.connectFeishu(); } catch {}
+        try { await api.platform.connectFeishu(); } catch {}
         onConnected?.();
         onOpenChange(false);
       } else {
@@ -85,9 +132,11 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
     }
   };
 
+  const selectedAgent = AGENT_OPTIONS.find((a) => a.value === agentType) || AGENT_OPTIONS[0];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-white">
@@ -98,13 +147,101 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
                 {t('home.imChannel.feishu.setup.connect', '连接 飞书 / Feishu')}
               </DialogTitle>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {t('home.imChannel.feishu.setup.configCredentials', '配置 Bot 凭证')}
+                {t('home.imChannel.feishu.setup.configCredentials', '配置 Bot 凭证 + CLI 后端')}
               </p>
             </div>
           </div>
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
+          {/* ─── CLI Backend Selector ──────────────────────────────────── */}
+          <div>
+            <label className="text-[12px] font-medium text-foreground">CLI Backend</label>
+            <div className="relative mt-1.5">
+              <button
+                type="button"
+                onClick={() => setAgentDropdownOpen(!agentDropdownOpen)}
+                disabled={saving}
+                className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-[12px] hover:bg-accent/50 transition-colors disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+                    {selectedAgent.icon}
+                  </div>
+                  <div className="text-left">
+                    <div className="font-medium">{selectedAgent.label}</div>
+                    <div className="text-[10px] text-muted-foreground">{selectedAgent.desc}</div>
+                  </div>
+                </div>
+                <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${agentDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {agentDropdownOpen && (
+                <div className="absolute z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-lg">
+                  {AGENT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setAgentType(opt.value);
+                        setAgentDropdownOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-[12px] hover:bg-accent/50 first:rounded-t-md last:rounded-b-md transition-colors ${
+                        agentType === opt.value ? 'bg-accent/30' : ''
+                      }`}
+                    >
+                      <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+                        {opt.icon}
+                      </div>
+                      <div className="text-left">
+                        <div className="font-medium">{opt.label}</div>
+                        <div className="text-[10px] text-muted-foreground">{opt.desc}</div>
+                      </div>
+                      {agentType === opt.value && (
+                        <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ─── OpenClaw Config (conditional) ─────────────────────────── */}
+          {agentType === 'openclaw' && (
+            <div className="space-y-3 rounded-lg border border-border/50 bg-muted/30 p-3">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                <Cpu className="h-3 w-3" />
+                OpenClaw
+              </div>
+              <div>
+                <label className="text-[11px] text-muted-foreground">
+                  Binary Path
+                  <span className="text-[10px] ml-1 opacity-60">(empty = auto detect from PATH)</span>
+                </label>
+                <Input
+                  value={ocBinPath}
+                  onChange={(e) => setOcBinPath(e.target.value)}
+                  placeholder="openclaw (auto)"
+                  className="mt-1 font-mono text-[11px] h-8"
+                  disabled={saving}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-muted-foreground">Gateway Port</label>
+                <Input
+                  value={ocGatewayPort}
+                  onChange={(e) => setOcGatewayPort(e.target.value)}
+                  placeholder="18789"
+                  className="mt-1 font-mono text-[11px] h-8 w-28"
+                  disabled={saving}
+                  type="number"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ─── Feishu Credentials ────────────────────────────────────── */}
           <div>
             <label className="text-[12px] font-medium text-foreground">App ID</label>
             <Input
@@ -143,18 +280,6 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
               autoComplete="off"
               disabled={saving}
             />
-            <p className="mt-1.5 text-[11px] text-muted-foreground">
-              {t('home.imChannel.feishu.setup.appIdHint', '从')}{' '}
-              <button
-                type="button"
-                onClick={() => openUrl(FEISHU_CREDENTIALS_URL)}
-                className="text-primary hover:underline inline-flex items-center gap-0.5"
-              >
-                飞书开放平台 &gt; 应用凭证
-                <ExternalLink className="h-2.5 w-2.5" />
-              </button>{' '}
-              {t('home.imChannel.feishu.setup.pageGet', '页面获取')}
-            </p>
           </div>
 
           <div>

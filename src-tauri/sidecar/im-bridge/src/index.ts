@@ -484,6 +484,7 @@ function createEventDispatcher(): lark.EventDispatcher {
         // ─── Slash commands ───
         const lower = text.toLowerCase();
         if (lower === '/new' || lower === '/reset') {
+          deleteSession(chatId);
           await sendText(chatId, '✅ 会话已重置，下次消息将开始新对话。');
           log('info', `Session reset for chat ${chatId}`);
           return;

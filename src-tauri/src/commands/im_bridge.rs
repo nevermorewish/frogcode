@@ -649,15 +649,24 @@ pub async fn im_bridge_start(
     let inner = state.inner.clone();
     let mut g = inner.lock().await;
 
-    // Already running?
-    if g.status == BridgeStatus::Running && g.child.is_some() {
-        return Ok(BridgeStatusInfo {
-            status: BridgeStatus::Running,
-            port: g.port,
-            error: None,
-            feishu_status: g.feishu_status.clone(),
-        });
+    // Kill any existing child process first (prevents zombie sidecar from previous version)
+    if let Some(abort) = g.sse_abort.take() {
+        let _ = abort.send(());
     }
+    if let Some(port) = g.port {
+        let url = format!("http://127.0.0.1:{}/disconnect", port);
+        let client = reqwest::Client::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.post(&url).send(),
+        ).await;
+    }
+    if let Some(mut child) = g.child.take() {
+        let _ = child.kill().await;
+        info!("Killed previous IM sidecar");
+    }
+    g.port = None;
+    g.feishu_status = None;
 
     g.status = BridgeStatus::Starting;
     g.error = None;

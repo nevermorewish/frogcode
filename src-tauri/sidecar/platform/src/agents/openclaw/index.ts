@@ -7,8 +7,18 @@
  *   - Per-chat AgentSession sends messages via RPC and subscribes to events
  *   - WS events are normalized to AgentEvent for the card renderer
  *
+ * Runtime layout (mirrors nexu):
+ *   ~/.anycode/openclaw/
+ *     config/openclaw.json   ← gateway config (schema-validated writes)
+ *     state/                 ← device identity, agents, extensions, skills
+ *     tmp/                   ← TMPDIR passed to gateway
+ *
+ * The global ~/.openclaw/ directory (used by standalone openclaw CLI) is
+ * intentionally NOT touched — frogcode maintains its own device identity so
+ * two installs can coexist on one machine.
+ *
  * Config is read from ~/.anycode/agents/openclaw.json:
- *   { binPath, stateDir, gatewayPort, gatewayToken }
+ *   { binPath, stateDir, gatewayPort, gatewayToken, controlUiOrigins }
  */
 
 import { EventEmitter } from 'node:events';
@@ -25,6 +35,8 @@ import type {
 } from '../types.js';
 import { OpenClawProcessManager, type ProcessConfig } from './process.js';
 import { OpenClawWsClient, type WsClientConfig } from './ws-client.js';
+import { OpenClawConfigWriter } from './config-writer.js';
+import { initialConfig } from './migrate.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -34,38 +46,47 @@ export interface OpenClawAgentConfig {
   /** Path to openclaw binary. null = PATH / npx lookup. */
   binPath?: string | null;
   /**
-   * OpenClaw state directory — must match where the gateway stores its
-   * device trust store / plugins / canvas. Default: ~/.openclaw
-   * This is the SAME directory openclaw gateway uses globally, so our
-   * device.json writes land where the gateway expects them.
+   * OpenClaw state directory — device trust store, agents, canvas, cron.
+   * Default: ~/.anycode/openclaw/state
    */
   stateDir?: string;
   /**
-   * Frogcode-owned config path. Independent from openclaw's global state.
-   * Default: ~/.anycode/openclaw/config.json
+   * Config file path.
+   * Default: ~/.anycode/openclaw/config/openclaw.json
    */
   configPath?: string;
+  /**
+   * TMPDIR passed to the gateway process.
+   * Default: ~/.anycode/openclaw/tmp
+   */
+  tmpDir?: string;
+  /**
+   * Plugin load directory (openclaw reads plugins.load.paths from config).
+   * Default: {stateDir}/extensions
+   */
+  extensionsDir?: string;
+  /**
+   * Skill extra-dirs for hot-loading.
+   * Default: {stateDir}/skills
+   */
+  skillsDir?: string;
   /** Gateway port. Default: 18789 */
   gatewayPort?: number;
   /** Optional explicit gateway auth token. */
   gatewayToken?: string | null;
 }
 
-// OpenClaw's global state dir — shared with the openclaw CLI itself.
-// Using this lets us write our device identity into the same trust store
-// that the gateway will recognize on handshake.
-const DEFAULT_STATE_DIR = path.join(
-  process.env.HOME || process.env.USERPROFILE || '',
-  '.openclaw',
-);
-// Frogcode-owned config path, kept separate from openclaw's global state.
-const DEFAULT_CONFIG_PATH = path.join(
-  process.env.HOME || process.env.USERPROFILE || '',
-  '.anycode',
-  'openclaw',
-  'config.json',
-);
-const DEFAULT_PORT = 18789;
+const HOME = process.env.HOME || process.env.USERPROFILE || '';
+const DEFAULT_RUNTIME_ROOT = path.join(HOME, '.anycode', 'openclaw');
+const DEFAULT_CONFIG_PATH = path.join(DEFAULT_RUNTIME_ROOT, 'config', 'openclaw.json');
+const DEFAULT_STATE_DIR = path.join(DEFAULT_RUNTIME_ROOT, 'state');
+const DEFAULT_TMP_DIR = path.join(DEFAULT_RUNTIME_ROOT, 'tmp');
+const DEFAULT_EXTENSIONS_DIR = path.join(DEFAULT_STATE_DIR, 'extensions');
+const DEFAULT_SKILLS_DIR = path.join(DEFAULT_STATE_DIR, 'skills');
+// 18790 to avoid conflict with a globally-installed standalone openclaw,
+// which defaults to 18789 and often auto-registers itself as a Windows
+// scheduled task ("OpenClaw Gateway") that permanently occupies that port.
+const DEFAULT_PORT = 18790;
 
 function log(level: string, ...parts: any[]) {
   const msg = parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ');
@@ -115,93 +136,14 @@ export interface OpenClawProviderConfig {
 }
 
 /**
- * Write a minimal valid openclaw config. Schema matches nexu's
- * openclaw-config-compiler.ts → openclawConfigSchema.parse().
- *
- * If `providers` are supplied, inject them under config.models.providers
- * so the gateway's internal claude/openai calls can find API URL + key.
+ * Splice provider entries into an existing config object, preserving all
+ * other fields. Used by BYOK flows where the user adds/changes API keys
+ * after the initial config was bootstrapped from template or legacy.
  */
-function writeDefaultConfig(
-  configPath: string,
-  port: number,
-  providers: OpenClawProviderConfig[] = [],
-): void {
-  // Compile providers → openclaw models.providers map
-  const providersMap: Record<string, any> = {};
-  let defaultModel = 'anthropic/claude-sonnet-4-6';
-
-  for (const p of providers) {
-    if (!p.apiKey || !p.models.length) continue;
-    const defaults = PROVIDER_DEFAULTS[p.providerId] ?? {
-      baseUrl: p.baseUrl ?? '',
-      api: 'openai-completions',
-    };
-    providersMap[p.providerId] = {
-      baseUrl: p.baseUrl || defaults.baseUrl,
-      apiKey: p.apiKey,
-      api: defaults.api,
-      models: p.models.map((id) => buildModelEntry(id)),
-    };
-    // First provider's first model becomes default
-    if (providers[0] === p && p.models[0]) {
-      defaultModel = `${p.providerId}/${p.models[0]}`;
-    }
-  }
-
-  const hasModels = Object.keys(providersMap).length > 0;
-
-  const config: Record<string, any> = {
-    gateway: {
-      port,
-      mode: 'local',
-      bind: 'loopback',
-      auth: { mode: 'none' },
-    },
-    agents: {
-      defaults: {
-        model: { primary: defaultModel },
-        timeoutSeconds: 300,
-      },
-      list: [],
-    },
-    tools: {
-      exec: { security: 'full', ask: 'off', host: 'gateway' },
-    },
-    session: {
-      dmScope: 'per-peer',
-      reset: { mode: 'idle', idleMinutes: 525600 },
-    },
-    channels: {},
-    bindings: [],
-  };
-
-  if (hasModels) {
-    config.models = {
-      mode: 'merge',
-      providers: providersMap,
-    };
-  }
-
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-}
-
-/**
- * Update an existing config with provider entries. Preserves all other
- * fields (e.g. agents list, channels, bindings). Called on provider changes.
- */
-export function updateConfigProviders(
-  configPath: string,
+function applyProviders(
+  config: Record<string, any>,
   providers: OpenClawProviderConfig[],
 ): void {
-  let config: Record<string, any>;
-  try {
-    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  } catch {
-    writeDefaultConfig(configPath, DEFAULT_PORT, providers);
-    return;
-  }
-
   const providersMap: Record<string, any> = {};
   for (const p of providers) {
     if (!p.apiKey || !p.models.length) continue;
@@ -222,8 +164,30 @@ export function updateConfigProviders(
   } else {
     delete config.models;
   }
+}
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+/**
+ * Update an existing config file with new provider entries. Preserves all
+ * other fields. Used by external call sites that want to inject BYOK keys
+ * without owning an OpenClawAgent instance. Prefer calling
+ * OpenClawAgent.updateProviders() instead when an agent instance is
+ * available — it reuses a writer with a warm content cache.
+ */
+export function updateConfigProviders(
+  configPath: string,
+  providers: OpenClawProviderConfig[],
+): void {
+  const writer = new OpenClawConfigWriter(configPath);
+  let config: Record<string, any>;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    // File doesn't exist or is corrupt — bootstrap from legacy/template
+    // then splice providers on top.
+    config = initialConfig(DEFAULT_STATE_DIR, DEFAULT_EXTENSIONS_DIR, DEFAULT_PORT);
+  }
+  applyProviders(config, providers);
+  writer.write(config);
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +361,8 @@ export class OpenClawAgent implements Agent {
   private wsClient: OpenClawWsClient | null = null;
   private started = false;
   private lastError: string | null = null;
+  /** Lazy writer — constructed in ensureGateway, reused across provider updates. */
+  private configWriter: OpenClawConfigWriter | null = null;
 
   constructor(config: OpenClawAgentConfig = {}) {
     this.config = config;
@@ -404,6 +370,10 @@ export class OpenClawAgent implements Agent {
 
   status(): OpenClawStatus {
     const stateDir = this.config.stateDir || DEFAULT_STATE_DIR;
+    // Prefer a fatal error from the process manager (port conflict etc) over
+    // the agent-level lastError since it's more specific and actionable.
+    const fatal = this.processManager?.getFatalError() ?? null;
+    const error = fatal ?? this.lastError;
     return {
       processAlive: this.processManager?.isAlive() ?? false,
       wsConnected: this.wsClient?.isConnected() ?? false,
@@ -411,10 +381,49 @@ export class OpenClawAgent implements Agent {
       started: this.started,
       binPath: this.config.binPath || null,
       stateDir,
-      error: this.lastError,
+      error,
       logPath: this.processManager?.getLogPath() ?? path.join(stateDir, 'openclaw.log'),
       logTail: this.processManager?.getLogTail() ?? [],
     };
+  }
+
+  /**
+   * Update the provider list in the live config. Preserves every other
+   * field (agents, channels, bindings, plugins…) and routes through the
+   * writer with content-hash dedup. Openclaw's file watcher picks up the
+   * change via hybrid reload — no restart needed.
+   */
+  updateProviders(providers: OpenClawProviderConfig[]): void {
+    const configPath = this.config.configPath || DEFAULT_CONFIG_PATH;
+    const writer = this.configWriter ?? new OpenClawConfigWriter(configPath);
+    this.configWriter = writer;
+
+    let config: Record<string, any>;
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch {
+      config = this.bootstrapConfig();
+    }
+    applyProviders(config, providers);
+    try {
+      writer.write(config);
+    } catch (err: any) {
+      this.lastError = `config write failed: ${err.message || String(err)}`;
+      throw err;
+    }
+  }
+
+  /**
+   * Produce the initial config object for first-time writes. Prefers the
+   * user's legacy ~/.openclaw/openclaw.json, falls back to the bundled
+   * template. Path fields are rewritten to point at frogcode's stateDir.
+   */
+  private bootstrapConfig(): Record<string, any> {
+    const stateDir = this.config.stateDir || DEFAULT_STATE_DIR;
+    const extensionsDir =
+      this.config.extensionsDir || path.join(stateDir, 'extensions');
+    const port = this.config.gatewayPort || DEFAULT_PORT;
+    return initialConfig(stateDir, extensionsDir, port);
   }
 
   async restart(): Promise<void> {
@@ -497,42 +506,62 @@ export class OpenClawAgent implements Agent {
     const binPath = resolveOpenClawBin(this.config.binPath);
     const stateDir = this.config.stateDir || DEFAULT_STATE_DIR;
     const configPath = this.config.configPath || DEFAULT_CONFIG_PATH;
+    const tmpDir = this.config.tmpDir || DEFAULT_TMP_DIR;
+    const extensionsDir =
+      this.config.extensionsDir || path.join(stateDir, 'extensions');
+    const skillsDir = this.config.skillsDir || path.join(stateDir, 'skills');
     const port = this.config.gatewayPort || DEFAULT_PORT;
 
-    // Ensure state + config dirs exist
+    // Ensure runtime dirs exist (config dir is handled by the writer)
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
 
-    // Write a minimal valid config if none exists. Schema matches nexu's
-    // openclaw-config-compiler.ts output — see openclawConfigSchema in openclaw/src/config.
-    if (!fs.existsSync(configPath)) {
-      writeDefaultConfig(configPath, port);
-      log('info', `wrote default config to ${configPath}`);
+    // Always write through the config writer. It seeds its cache from the
+    // existing file on first call, so no-op writes are silently skipped and
+    // openclaw's file watcher is not triggered unnecessarily.
+    this.configWriter = this.configWriter ?? new OpenClawConfigWriter(configPath);
+    try {
+      // On first cold start (no config file yet) bootstrap from the user's
+      // legacy ~/.openclaw/openclaw.json if present, otherwise from the
+      // bundled openclaw-template.json. Subsequent runs leave the file
+      // alone so user edits (providers, plugins, channels) are preserved.
+      if (!fs.existsSync(configPath)) {
+        this.configWriter.write(this.bootstrapConfig());
+        log('info', `bootstrapped config at ${configPath}`);
+      }
+    } catch (err: any) {
+      throw new Error(
+        `failed to write openclaw config at ${configPath}: ${err.message || String(err)}`,
+      );
     }
 
     log('info', `stateDir=${stateDir}`);
     log('info', `configPath=${configPath}`);
+    log('info', `extensionsDir=${extensionsDir}`);
+    log('info', `tmpDir=${tmpDir}`);
 
-    // Port preflight — if in use, give it a moment (TIME_WAIT from our own stop),
-    // then re-check. Note: we pass --force to openclaw so it will kill stale
-    // listeners itself if our own process managed to hold the port.
+    // Port preflight — if in use, give it a moment (TIME_WAIT from our own
+    // stop), then re-check. Without --force we rely on reapOrphanFromPidFile
+    // in process.ts to handle stale listeners from crashed previous runs.
     if (await isPortInUse(port)) {
       log('info', `port ${port} appears in use; waiting 2s for release...`);
       await new Promise((r) => setTimeout(r, 2000));
       if (await isPortInUse(port)) {
-        // Still in use — let openclaw --force deal with it. We log a warning
-        // but don't throw; openclaw will either take over the port or error.
-        log('warn', `port ${port} still in use; relying on openclaw --force`);
+        log('warn', `port ${port} still in use; reapOrphanFromPidFile will try to recover`);
       }
     }
 
-    // Start process — log file goes to frogcode's config dir (not ~/.openclaw)
+    // Start process — log file goes next to the config
     const logPath = path.join(path.dirname(configPath), 'openclaw.log');
     const procConfig: ProcessConfig = {
       binPath,
       stateDir,
       configPath,
       gatewayPort: port,
+      tmpDir,
+      extensionsDir,
       logPath,
     };
     this.processManager = new OpenClawProcessManager(procConfig);

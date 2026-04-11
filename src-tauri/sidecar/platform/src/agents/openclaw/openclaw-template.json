@@ -1,0 +1,105 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.4.30"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "anthropic": {
+        "api": "anthropic-messages",
+        "apiKey": "",
+        "baseUrl": "",
+        "models": [
+          {
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "claude-opus-4-6",
+            "input": [
+              "text",
+              "image"
+            ],
+            "maxTokens": 8192,
+            "name": "claude-opus-4-6",
+            "reasoning": false
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "model": {
+        "primary": "anthropic/claude-opus-4-6"
+      },
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "workspace": "C:\\Users\\Administrator\\.openclaw\\workspace"
+    }
+  },
+  "tools": {
+    "web": {
+      "fetch": {
+        "enabled": true
+      },
+      "search": {
+        "apiKey": "BSAzTuUVKTnJLNZmDuilOEKaKR3QTYF",
+        "enabled": true
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "channels": {
+    "feishu": {
+      "allowFrom": [
+        "*"
+      ],
+      "appId": "",
+      "appSecret": "",
+      "dmPolicy": "open",
+      "enabled": true
+    }
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "b00ae3f77621f7fd62082b7ed4d3096b2f2381e1b12cdd33"
+    },
+    "bind": "lan",
+    "controlUi": {
+      "allowInsecureAuth": true,
+      "allowedOrigins": [
+        "https://frogclaw.com/"
+      ],
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "mode": "local",
+    "port": 18789,
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "plugins": {
+    "entries": {
+      "feishu": {
+        "enabled": true
+      }
+    }
+  }
+}

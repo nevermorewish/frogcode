@@ -86,12 +86,25 @@ function loadConfig(configPath: string): PlatformConfig | null {
       appSecret: cfg.appSecret || cfg.app_secret || '',
       projectPath: cfg.projectPath || cfg.project_path || '',
       enabled: !!cfg.enabled,
-      agentType: (cfg.agentType as AgentType) || 'claudecode',
+      // Default to 'openclaw' (matches Rust default_agent_type) so a fresh
+      // install lands on the OpenClaw adapter.
+      agentType: (cfg.agentType as AgentType) || 'openclaw',
     };
   } catch (e: any) {
     log('warn', 'Failed to load config:', e.message);
     return null;
   }
+}
+
+/** Default config synthesized when no platform-config.json exists on disk. */
+function defaultConfig(): PlatformConfig {
+  return {
+    appId: '',
+    appSecret: '',
+    projectPath: '',
+    enabled: false,
+    agentType: 'openclaw',
+  };
 }
 
 // ============================================================================
@@ -697,14 +710,22 @@ const server = http.createServer(async (req, res) => {
 // Startup
 // ============================================================================
 currentConfig = loadConfig(args.config);
-log('info', 'starting, config=', currentConfig ? 'loaded' : 'none');
-
-// Initialize agent manager eagerly so it's ready when Feishu connects
-if (currentConfig) {
-  initAgentManager(currentConfig.agentType).catch((e: any) =>
-    log('error', 'initAgentManager:', e.message),
-  );
+if (!currentConfig) {
+  // No platform-config.json yet — synthesize one so the agent manager can
+  // initialize and the OpenClaw Sessions controls are usable immediately.
+  // We do NOT persist this to disk; the first real saveConfig() call from
+  // the UI will write the file.
+  currentConfig = defaultConfig();
+  log('info', 'no config on disk, using default (agentType=openclaw)');
+} else {
+  log('info', 'config loaded');
 }
+
+// Initialize agent manager eagerly so it's ready when Feishu connects OR
+// when the user hits the OpenClaw Sessions page.
+initAgentManager(currentConfig.agentType).catch((e: any) =>
+  log('error', 'initAgentManager:', e.message),
+);
 
 server.listen(args.port, '127.0.0.1', () => {
   const addr = server.address();

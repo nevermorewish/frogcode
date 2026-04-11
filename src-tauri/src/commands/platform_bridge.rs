@@ -64,13 +64,17 @@ pub struct FeishuConfig {
     pub app_secret: String,
     pub project_path: String,
     pub enabled: bool,
-    /// CLI backend to use: "claudecode" | "openclaw". Defaults to "claudecode".
+    /// CLI backend to use: "claudecode" | "openclaw". Defaults to "openclaw"
+    /// so the OpenClaw Sessions view is usable out of the box. Existing users
+    /// whose platform-config.json explicitly sets agent_type keep their
+    /// choice; this default only applies when the field is missing or when
+    /// no config file exists.
     #[serde(default = "default_agent_type")]
     pub agent_type: String,
 }
 
 fn default_agent_type() -> String {
-    "claudecode".to_string()
+    "openclaw".to_string()
 }
 
 impl Default for FeishuConfig {

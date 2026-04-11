@@ -212,7 +212,17 @@ export const OpenClawSessionsView: React.FC = () => {
       const s = await api.platform.getOpenclawStatus();
       setStatus(s);
     } catch (e: any) {
-      setStatus({ ok: false, active: false, agentType: 'unknown', error: String(e?.message || e) });
+      // The Rust sidecar_port() returns "platform sidecar not running" when
+      // the bridge hasn't been spawned. Surface that directly instead of
+      // masking it with a generic "unknown" agent type, which misled users
+      // into thinking they had to touch Feishu settings.
+      const msg = String(e?.message || e);
+      setStatus({
+        ok: false,
+        active: false,
+        agentType: 'unavailable',
+        error: msg,
+      });
     }
   }, []);
 
@@ -395,10 +405,16 @@ export const OpenClawSessionsView: React.FC = () => {
           {!status.active ? (
             <>
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              <span>
-                Agent type is <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{status.agentType}</code>, not OpenClaw.
-                Switch to OpenClaw in Feishu settings to enable.
-              </span>
+              {status.error ? (
+                <span className="flex-1">
+                  <strong>Platform bridge unavailable:</strong> {status.error}
+                </span>
+              ) : (
+                <span>
+                  Agent type is <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{status.agentType}</code>, not OpenClaw.
+                  Switch to OpenClaw in Feishu settings to enable.
+                </span>
+              )}
             </>
           ) : status.wsConnected && status.processAlive ? (
             <>

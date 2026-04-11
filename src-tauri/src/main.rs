@@ -222,23 +222,29 @@ fn main() {
             // Initialize platform bridge state
             app.manage(PlatformBridgeState::default());
 
-            // Auto-start platform sidecar if user enabled it
+            // Auto-start platform sidecar on every boot so the OpenClaw Sessions
+            // view (and any future agent-managed feature) works without needing
+            // the user to complete Feishu setup first. Feishu auto-connect is
+            // still gated on enabled+appId being present — we only start the
+            // sidecar process itself, we don't auto-connect to Feishu.
             let app_handle_for_platform = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match commands::platform_bridge::platform_get_config().await {
-                    Ok(cfg) if cfg.enabled && !cfg.app_id.is_empty() => {
-                        let state = app_handle_for_platform.state::<PlatformBridgeState>();
-                        match commands::platform_bridge::platform_start(state, app_handle_for_platform.clone()).await {
-                            Ok(_) => {
-                                // Trigger Feishu connection
+                let state = app_handle_for_platform.state::<PlatformBridgeState>();
+                match commands::platform_bridge::platform_start(state, app_handle_for_platform.clone()).await {
+                    Ok(_) => {
+                        log::info!("Platform sidecar auto-started");
+                        // Only connect Feishu if the user has explicitly enabled it
+                        // with valid credentials — otherwise leave the sidecar idle
+                        // and ready for OpenClaw controls.
+                        if let Ok(cfg) = commands::platform_bridge::platform_get_config().await {
+                            if cfg.enabled && !cfg.app_id.is_empty() {
                                 let state2 = app_handle_for_platform.state::<PlatformBridgeState>();
                                 let _ = commands::platform_bridge::platform_connect_feishu(state2).await;
-                                log::info!("Platform bridge auto-started");
+                                log::info!("Feishu auto-connected");
                             }
-                            Err(e) => log::warn!("Platform bridge auto-start failed: {}", e),
                         }
                     }
-                    _ => log::debug!("Platform bridge not enabled, skipping auto-start"),
+                    Err(e) => log::warn!("Platform sidecar auto-start failed: {}", e),
                 }
             });
 

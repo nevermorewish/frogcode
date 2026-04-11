@@ -19,12 +19,16 @@ import net from 'node:net';
 export interface ProcessConfig {
   /** Path to openclaw binary. If empty, resolves via PATH. */
   binPath?: string;
-  /** Working directory / state root for openclaw. */
+  /** Working directory / state root for openclaw (OPENCLAW_STATE_DIR). */
   stateDir: string;
-  /** Path to the compiled openclaw config JSON. */
+  /** Path to the compiled openclaw config JSON (OPENCLAW_CONFIG_PATH). */
   configPath: string;
-  /** Gateway port (for health probe). */
+  /** Gateway port (for health probe, also passed as OPENCLAW_GATEWAY_PORT). */
   gatewayPort: number;
+  /** Temp directory for the gateway (TMPDIR env var). */
+  tmpDir: string;
+  /** Plugin load directory (OPENCLAW_EXTENSIONS_DIR env var). */
+  extensionsDir: string;
   /** Log file path. Defaults to {stateDir}/openclaw.log */
   logPath?: string;
 }
@@ -34,6 +38,14 @@ const MAX_LOG_LINES = 500;
 const MAX_RESTARTS = 10;
 const RESTART_WINDOW_MS = 120_000;
 const BASE_DELAY_MS = 3_000;
+/**
+ * If the gateway process exits within this many milliseconds of spawn, we
+ * treat it as a "fast failure" — usually port-in-use or an immediate config
+ * error. After MAX_FAST_FAILURES consecutive fast failures we stop the
+ * auto-restart loop so the user isn't stuck watching endless retries.
+ */
+const FAST_FAILURE_THRESHOLD_MS = 10_000;
+const MAX_FAST_FAILURES = 3;
 const NEXU_EVENT_MARKER = 'NEXU_EVENT ';
 
 function log(level: string, ...parts: any[]) {
@@ -55,6 +67,12 @@ export class OpenClawProcessManager extends EventEmitter {
   private logStream: fs.WriteStream | null = null;
   private logTail: string[] = [];
   private readonly logPath: string;
+  /** Timestamp of the last spawn, used to detect fast-failures. */
+  private spawnStartedAt = 0;
+  /** Consecutive fast-failure (exit <FAST_FAILURE_THRESHOLD_MS) count. */
+  private fastFailureCount = 0;
+  /** Terminal error message if auto-restart gave up. Exposed via getFatalError(). */
+  private fatalError: string | null = null;
 
   constructor(config: ProcessConfig) {
     super();
@@ -70,6 +88,14 @@ export class OpenClawProcessManager extends EventEmitter {
   /** Return the last N lines from the in-memory log tail. */
   getLogTail(): string[] {
     return [...this.logTail];
+  }
+
+  /**
+   * If auto-restart gave up (e.g. port is permanently held by another
+   * process), this returns a human-readable reason. Cleared by start().
+   */
+  getFatalError(): string | null {
+    return this.fatalError;
   }
 
   private writeLog(level: string, line: string): void {
@@ -115,22 +141,33 @@ export class OpenClawProcessManager extends EventEmitter {
   start(): void {
     if (this.child && !this.child.killed) return;
 
+    // Clear any previous fatal state so the caller can retry after fixing
+    // the root cause (e.g. stopping the conflicting process).
+    this.fatalError = null;
+
     this.openLogStream();
+
+    // Ensure runtime dirs exist before spawn. stateDir/extensionsDir are
+    // created defensively here (also by ensureGateway), tmpDir must be
+    // present because we pass it as TMPDIR and openclaw may rely on it
+    // before doing its own mkdir.
+    try {
+      fs.mkdirSync(this.config.stateDir, { recursive: true });
+      fs.mkdirSync(this.config.extensionsDir, { recursive: true });
+      fs.mkdirSync(this.config.tmpDir, { recursive: true });
+    } catch (e: any) {
+      this.writeLog('warn', `failed to mkdir runtime dirs: ${e.message}`);
+    }
 
     // Kill any orphan openclaw from a previous crashed run (recorded in pid file)
     reapOrphanFromPidFile(this.config.stateDir, (msg) => this.writeLog('info', msg));
 
     const cmd = this.config.binPath || 'openclaw';
-    // --allow-unconfigured lets openclaw start without gateway.mode=local in config
-    // --bind loopback binds to 127.0.0.1 only (local RPC, no external access)
-    const args = [
-      'gateway',
-      'run',
-      '--allow-unconfigured',
-      '--bind',
-      'loopback',
-      '--force',  // kill any stale listener on the target port
-    ];
+    // Gateway mode, bind, and force behaviors now come from the config file:
+    //   gateway.mode: 'local'   ← replaces --allow-unconfigured
+    //   gateway.bind: 'loopback' ← replaces --bind loopback
+    //   reapOrphanFromPidFile   ← replaces --force (safer, only kills our own)
+    const args = ['gateway', 'run'];
 
     this.writeLog('info', `spawn ${cmd} ${args.join(' ')} cwd=${this.config.stateDir}`);
     this.writeLog('info', `config: ${this.config.configPath}`);
@@ -143,7 +180,10 @@ export class OpenClawProcessManager extends EventEmitter {
           ...process.env,
           OPENCLAW_LOG_LEVEL: 'info',
           OPENCLAW_CONFIG_PATH: this.config.configPath,
+          OPENCLAW_STATE_DIR: this.config.stateDir,
+          OPENCLAW_EXTENSIONS_DIR: this.config.extensionsDir,
           OPENCLAW_GATEWAY_PORT: String(this.config.gatewayPort),
+          TMPDIR: this.config.tmpDir,
           ...(process.platform === 'darwin' ? { OPENCLAW_IMAGE_BACKEND: 'sips' } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -157,6 +197,7 @@ export class OpenClawProcessManager extends EventEmitter {
     }
 
     this.child = child;
+    this.spawnStartedAt = Date.now();
     this.windowStart = this.windowStart || Date.now();
 
     // Record PID for orphan reaping next run
@@ -179,10 +220,38 @@ export class OpenClawProcessManager extends EventEmitter {
     }
 
     child.on('close', (code) => {
-      this.writeLog('info', `exited code=${code}`);
+      const uptime = Date.now() - this.spawnStartedAt;
+      this.writeLog('info', `exited code=${code} uptime=${uptime}ms`);
       this.child = null;
       clearPidFile(this.config.stateDir);
       this.emit('exit', code);
+
+      // A healthy gateway runs for minutes/hours. If it died within
+      // FAST_FAILURE_THRESHOLD_MS it's almost certainly a startup error
+      // (port conflict, bad config, missing binary) and retrying without
+      // user intervention will just loop forever.
+      if (uptime < FAST_FAILURE_THRESHOLD_MS) {
+        this.fastFailureCount++;
+        this.writeLog(
+          'warn',
+          `fast failure ${this.fastFailureCount}/${MAX_FAST_FAILURES} (exited in ${uptime}ms)`,
+        );
+        if (this.fastFailureCount >= MAX_FAST_FAILURES) {
+          this.autoRestart = false;
+          // Surface a hint pulled from recent stderr if we can find one.
+          const hint = this.extractFailureHint();
+          this.fatalError =
+            hint ||
+            `openclaw gateway exited ${MAX_FAST_FAILURES} times in a row within ${FAST_FAILURE_THRESHOLD_MS}ms. Check logs; likely a port conflict or config error.`;
+          this.writeLog('error', `giving up: ${this.fatalError}`);
+          this.emit('max-restarts', this.fatalError);
+          return;
+        }
+      } else {
+        // Long-running success reset
+        this.fastFailureCount = 0;
+      }
+
       this.maybeAutoRestart();
     });
 
@@ -242,6 +311,42 @@ export class OpenClawProcessManager extends EventEmitter {
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────
+
+  /**
+   * Scan the recent log tail for well-known openclaw startup errors and
+   * produce an actionable hint. Returns null if nothing matches.
+   */
+  private extractFailureHint(): string | null {
+    // Walk backwards through the tail, newest first.
+    for (let i = this.logTail.length - 1; i >= 0; i--) {
+      const line = this.logTail[i];
+      if (line.includes('Port') && line.includes('already in use')) {
+        return (
+          `Port ${this.config.gatewayPort} is already in use by another process. ` +
+          `This usually means a global openclaw install is running as a Windows ` +
+          `scheduled task ("OpenClaw Gateway"). Stop it with: ` +
+          `schtasks /End /TN "OpenClaw Gateway"   or   openclaw gateway stop. ` +
+          `You can also change frogcode's gatewayPort in ~/.anycode/agents/openclaw.json.`
+        );
+      }
+      if (line.includes('gateway already running')) {
+        return (
+          `Another openclaw gateway is already holding the lock. ` +
+          `Run:   openclaw gateway stop   or   schtasks /End /TN "OpenClaw Gateway"`
+        );
+      }
+      if (line.includes('Gateway service appears registered')) {
+        return (
+          `A Windows scheduled task is keeping openclaw alive in the background. ` +
+          `Disable it with:   schtasks /Change /TN "OpenClaw Gateway" /DISABLE`
+        );
+      }
+      if (line.includes('ENOENT') || line.includes('not found')) {
+        return `openclaw binary not found — check binPath in ~/.anycode/agents/openclaw.json`;
+      }
+    }
+    return null;
+  }
 
   private maybeAutoRestart(): void {
     if (!this.autoRestart) return;

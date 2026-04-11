@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { useProject } from '@/contexts/ProjectContext';
 import { useNavigation } from '@/contexts/NavigationContext';
 import { useTabs } from '@/hooks/useTabs';

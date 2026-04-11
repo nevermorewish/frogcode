@@ -48,44 +48,95 @@ interface FeishuSetupDialogProps {
   onConnected?: () => void;
 }
 
+type FeishuCreds = { appId: string; appSecret: string };
+
+const EMPTY_CREDS: FeishuCreds = { appId: '', appSecret: '' };
+
 export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
   open,
   onOpenChange,
   onConnected,
 }) => {
   const { t } = useTranslation();
-  const [appId, setAppId] = useState('');
-  const [appSecret, setAppSecret] = useState('');
+  // Per-agent credentials — each CLI backend has its own Feishu app.
+  const [credsByAgent, setCredsByAgent] = useState<Record<AgentType, FeishuCreds>>({
+    claudecode: { ...EMPTY_CREDS },
+    openclaw: { ...EMPTY_CREDS },
+  });
   const [projectPath, setProjectPath] = useState('');
   const [agentType, setAgentType] = useState<AgentType>('claudecode');
+  // Keep the non-feishu fields of each agent's config so we can round-trip
+  // them when saving credentials (otherwise we'd blow away binPath etc.).
+  const [agentCfgRest, setAgentCfgRest] = useState<Record<AgentType, Record<string, any>>>({
+    claudecode: {},
+    openclaw: {},
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
 
-  // OpenClaw-specific config
+  // OpenClaw-specific surfaced fields
   const [ocBinPath, setOcBinPath] = useState('');
   const [ocGatewayPort, setOcGatewayPort] = useState('18789');
 
+  // Currently-displayed creds = whichever agent the dropdown points at.
+  const appId = credsByAgent[agentType].appId;
+  const appSecret = credsByAgent[agentType].appSecret;
+
+  const updateCurrentCreds = (patch: Partial<FeishuCreds>) => {
+    setCredsByAgent((prev) => ({
+      ...prev,
+      [agentType]: { ...prev[agentType], ...patch },
+    }));
+  };
+
   useEffect(() => {
     if (!open) return;
-    // Load platform config
-    api.platform
-      .getConfig()
-      .then((cfg) => {
-        setAppId(cfg.appId || '');
-        setAppSecret(cfg.appSecret || '');
-        setProjectPath(cfg.projectPath || '');
-        setAgentType((cfg.agentType as AgentType) || 'claudecode');
-      })
-      .catch(() => {});
-    // Load openclaw agent config
-    api.platform
-      .getAgentConfig('openclaw')
-      .then((cfg) => {
-        setOcBinPath(cfg.binPath || '');
-        setOcGatewayPort(String(cfg.gatewayPort || 18789));
-      })
-      .catch(() => {});
+
+    // Load both agent configs in parallel so switching the dropdown is instant.
+    const loadAll = async () => {
+      // platform-config.json carries the active agent selection + project path.
+      let activeAgent: AgentType = 'claudecode';
+      let activeProjectPath = '';
+      try {
+        const cfg = await api.platform.getConfig();
+        activeAgent = (cfg.agentType as AgentType) || 'claudecode';
+        activeProjectPath = cfg.projectPath || '';
+      } catch {}
+
+      // Pull each agent's config (including feishu creds) so the form can
+      // switch between them without another round trip.
+      const [claudeCfg, openclawCfg] = (await Promise.all([
+        api.platform.getAgentConfig('claudecode').catch(() => ({})),
+        api.platform.getAgentConfig('openclaw').catch(() => ({})),
+      ])) as [any, any];
+
+      const extractCreds = (cfg: any): FeishuCreds => ({
+        appId: cfg?.feishu?.appId || cfg?.feishu?.app_id || '',
+        appSecret: cfg?.feishu?.appSecret || cfg?.feishu?.app_secret || '',
+      });
+
+      const stripFeishu = (cfg: any): Record<string, any> => {
+        if (!cfg || typeof cfg !== 'object') return {};
+        const { feishu: _drop, ...rest } = cfg;
+        return rest;
+      };
+
+      setCredsByAgent({
+        claudecode: extractCreds(claudeCfg),
+        openclaw: extractCreds(openclawCfg),
+      });
+      setAgentCfgRest({
+        claudecode: stripFeishu(claudeCfg),
+        openclaw: stripFeishu(openclawCfg),
+      });
+      setProjectPath(activeProjectPath);
+      setAgentType(activeAgent);
+      setOcBinPath(openclawCfg?.binPath || '');
+      setOcGatewayPort(String(openclawCfg?.gatewayPort || 18789));
+    };
+
+    loadAll().catch(() => {});
   }, [open]);
 
   const handleSubmit = async () => {
@@ -96,7 +147,33 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
     }
     setSaving(true);
     try {
-      // Save platform config with agentType
+      // Persist credentials into each agent's per-agent config so switching
+      // the backend also switches which Feishu app is used.
+      const saveAgent = async (type: AgentType, extra: Record<string, any>) => {
+        const creds = credsByAgent[type];
+        const base = agentCfgRest[type] || {};
+        await api.platform.saveAgentConfig(type, {
+          ...base,
+          ...extra,
+          feishu: {
+            appId: creds.appId.trim(),
+            appSecret: creds.appSecret.trim(),
+          },
+        });
+      };
+
+      // claudecode: only creds (extra fields preserved from agentCfgRest).
+      await saveAgent('claudecode', {});
+      // openclaw: creds + the editable fields surfaced in this dialog.
+      await saveAgent('openclaw', {
+        binPath: ocBinPath.trim() || null,
+        gatewayPort: parseInt(ocGatewayPort, 10) || 18789,
+      });
+
+      // Platform root: only shared fields now — creds live in agent files.
+      // We still pass appId/appSecret in the DTO for wire-compat with the
+      // Rust FeishuConfig struct; the Rust side re-routes them into the
+      // active agent's file on write.
       await api.platform.saveConfig({
         appId: appId.trim(),
         appSecret: appSecret.trim(),
@@ -104,16 +181,6 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
         enabled: true,
         agentType,
       });
-
-      // Save per-agent config if openclaw
-      if (agentType === 'openclaw') {
-        await api.platform.saveAgentConfig('openclaw', {
-          binPath: ocBinPath.trim() || null,
-          stateDir: null,
-          gatewayPort: parseInt(ocGatewayPort, 10) || 18789,
-          gatewayToken: null,
-        });
-      }
 
       // Restart sidecar
       try { await api.platform.stop(); } catch {}
@@ -243,10 +310,15 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
 
           {/* ─── Feishu Credentials ────────────────────────────────────── */}
           <div>
-            <label className="text-[12px] font-medium text-foreground">App ID</label>
+            <label className="text-[12px] font-medium text-foreground">
+              App ID
+              <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                ({selectedAgent.label})
+              </span>
+            </label>
             <Input
               value={appId}
-              onChange={(e) => setAppId(e.target.value)}
+              onChange={(e) => updateCurrentCreds({ appId: e.target.value })}
               placeholder="cli_xxxxxxxxxxxxxxxx"
               className="mt-1.5 font-mono text-[12px]"
               autoComplete="off"
@@ -270,16 +342,27 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
           </div>
 
           <div>
-            <label className="text-[12px] font-medium text-foreground">App Secret</label>
+            <label className="text-[12px] font-medium text-foreground">
+              App Secret
+              <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                ({selectedAgent.label})
+              </span>
+            </label>
             <Input
               type="password"
               value={appSecret}
-              onChange={(e) => setAppSecret(e.target.value)}
+              onChange={(e) => updateCurrentCreds({ appSecret: e.target.value })}
               placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
               className="mt-1.5 font-mono text-[12px]"
               autoComplete="off"
               disabled={saving}
             />
+            <p className="mt-1.5 text-[10px] text-muted-foreground">
+              {t(
+                'home.imChannel.feishu.setup.perAgentHint',
+                '每个 CLI 后端使用独立的飞书应用 — 切换后端会自动切换凭证。'
+              )}
+            </p>
           </div>
 
           <div>

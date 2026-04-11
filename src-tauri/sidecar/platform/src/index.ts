@@ -81,14 +81,29 @@ function loadConfig(configPath: string): PlatformConfig | null {
     if (!fs.existsSync(configPath)) return null;
     const raw = fs.readFileSync(configPath, 'utf8');
     const cfg = JSON.parse(raw);
+    const agentType: AgentType = (cfg.agentType as AgentType) || 'openclaw';
+    // Feishu credentials live under each agent's per-agent config file as of
+    // v5.29 — pull them from agents/<type>.json's `feishu` sub-object. Fall
+    // back to root appId/appSecret (legacy layout) if the agent file has none,
+    // so old installs still work until the next write migrates them.
+    const agentCfg = loadAgentConfig(agentType) || {};
+    const agentFeishu = (agentCfg.feishu as { appId?: string; appSecret?: string } | undefined) || {};
     return {
-      appId: cfg.appId || cfg.app_id || '',
-      appSecret: cfg.appSecret || cfg.app_secret || '',
+      appId:
+        agentFeishu.appId ||
+        cfg.appId ||
+        cfg.app_id ||
+        '',
+      appSecret:
+        agentFeishu.appSecret ||
+        cfg.appSecret ||
+        cfg.app_secret ||
+        '',
       projectPath: cfg.projectPath || cfg.project_path || '',
       enabled: !!cfg.enabled,
       // Default to 'openclaw' (matches Rust default_agent_type) so a fresh
       // install lands on the OpenClaw adapter.
-      agentType: (cfg.agentType as AgentType) || 'openclaw',
+      agentType,
     };
   } catch (e: any) {
     log('warn', 'Failed to load config:', e.message);

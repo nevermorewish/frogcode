@@ -1040,7 +1040,22 @@ fn query_registry_paths(_tool: &str) -> Vec<String> {
 /// Main function to find the Claude binary - Cross-platform version
 /// Supports Windows and macOS, only uses system-installed Claude CLI
 /// 🔥 增强：添加详细日志，支持多 Node 版本场景
+///
+/// Thin Tauri wrapper that resolves `app_data_dir` from `AppHandle` and delegates
+/// to `find_claude_binary_with_data_dir`, which is the transport-agnostic entry
+/// point used by both the desktop and `frogcode-web` binaries.
 pub fn find_claude_binary(app_handle: &tauri::AppHandle) -> Result<String, String> {
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    find_claude_binary_with_data_dir(&data_dir)
+}
+
+/// Transport-agnostic Claude CLI discovery. Accepts the app data directory
+/// (containing `agents.db`) directly, so it can be called from the web
+/// server binary where no Tauri `AppHandle` is available.
+pub fn find_claude_binary_with_data_dir(app_data_dir: &std::path::Path) -> Result<String, String> {
     info!("========================================");
     info!("Starting Claude CLI binary search...");
     info!("========================================");
@@ -1052,7 +1067,7 @@ pub fn find_claude_binary(app_handle: &tauri::AppHandle) -> Result<String, Strin
     info!("Platform: Windows");
 
     // First check if we have a stored path in the database
-    if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+    {
         let db_path = app_data_dir.join("agents.db");
         if db_path.exists() {
             if let Ok(conn) = rusqlite::Connection::open(&db_path) {
@@ -1165,7 +1180,7 @@ pub fn find_claude_binary(app_handle: &tauri::AppHandle) -> Result<String, Strin
         info!("========================================");
 
         // Store the successful path in database for future use
-        if let Err(e) = store_claude_path(app_handle, &best.path) {
+        if let Err(e) = store_claude_path_at(app_data_dir, &best.path) {
             warn!("Failed to store claude path in database: {}", e);
         }
 
@@ -1176,10 +1191,20 @@ pub fn find_claude_binary(app_handle: &tauri::AppHandle) -> Result<String, Strin
     }
 }
 
-/// Store Claude CLI path in database for future use
+/// Store Claude CLI path in database for future use (Tauri wrapper)
 fn store_claude_path(app_handle: &tauri::AppHandle, path: &str) -> Result<(), String> {
-    if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
-        if let Err(e) = std::fs::create_dir_all(&app_data_dir) {
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    store_claude_path_at(&data_dir, path)
+}
+
+/// Transport-agnostic version of `store_claude_path` that accepts the data
+/// directory directly.
+fn store_claude_path_at(app_data_dir: &std::path::Path, path: &str) -> Result<(), String> {
+    {
+        if let Err(e) = std::fs::create_dir_all(app_data_dir) {
             return Err(format!("Failed to create app data directory: {}", e));
         }
 
@@ -1210,8 +1235,6 @@ fn store_claude_path(app_handle: &tauri::AppHandle, path: &str) -> Result<(), St
             }
             Err(e) => Err(format!("Failed to open database: {}", e)),
         }
-    } else {
-        Err("Failed to get app data directory".to_string())
     }
 }
 

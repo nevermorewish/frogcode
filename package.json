@@ -12,7 +12,10 @@
     "tauri:build": "pwsh -File build.ps1",
     "tauri:build-ci": "tauri build",
     "tauri:build-fast": "tauri build --profile dev-release",
-    "tauri:dev": "tauri dev"
+    "tauri:dev": "tauri dev",
+    "web:build": "npm run build && cd src-tauri && cargo build --release --bin frogcode-web",
+    "web:build-fast": "npm run build && cd src-tauri && cargo build --profile dev-release --bin frogcode-web",
+    "web:run": "npm run build && cd src-tauri && cargo run --bin frogcode-web"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.30",

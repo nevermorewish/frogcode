@@ -1,4 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+// Routes through the apiAdapter so the same calls work in Tauri (pass-through)
+// and in a browser served by `frogcode-web` (REST / WebSocket fallback).
+import { invoke } from "@/lib/apiAdapter";
 import type { HooksConfiguration } from '@/types/hooks';
 import { HooksManager } from '@/lib/hooksManager';
 import { codexProviderPresets } from '@/config/codexProviderPresets';

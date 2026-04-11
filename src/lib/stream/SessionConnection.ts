@@ -5,7 +5,8 @@
  * 支持 Claude、Codex、Gemini 引擎
  */
 
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { AsyncQueue } from './AsyncQueue';
 import { converterRegistry, type EngineType } from './converters';
 import type { ClaudeStreamMessage } from '@/types/claude';

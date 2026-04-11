@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Play, Loader2, Terminal, AlertCircle } from "lucide-react";
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api, type ProcessInfo, type Session } from "@/lib/api";

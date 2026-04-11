@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { api } from '@/lib/api';
 
 /**

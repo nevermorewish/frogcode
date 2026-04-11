@@ -12,8 +12,10 @@ pub use models::*;
 pub use paths::*;
 // Export platform utilities for process window hiding
 pub use self::cli_runner::{
-    cancel_claude_execution, continue_claude_code, execute_claude_code, get_claude_session_output,
-    list_running_claude_sessions, resume_claude_code, ClaudeProcessState,
+    cancel_claude_execution, cancel_claude_execution_with_deps, continue_claude_code,
+    continue_claude_code_with_deps, execute_claude_code, execute_claude_code_with_deps,
+    get_claude_session_output, list_running_claude_sessions, resume_claude_code,
+    resume_claude_code_with_deps, ClaudeProcessState, ClaudeSpawnDeps,
 };
 pub use self::config::{
     check_claude_version, clear_custom_claude_path, find_claude_md_files, get_available_tools,

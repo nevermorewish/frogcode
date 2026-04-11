@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useTabs } from './useTabs';
-import { listen } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { api } from '@/lib/api';
 
 /**

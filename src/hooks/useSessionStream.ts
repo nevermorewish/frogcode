@@ -12,7 +12,8 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { api, type Session } from '@/lib/api';
 import { normalizeUsageData } from '@/lib/utils';
 import type { ClaudeStreamMessage } from '@/types/claude';

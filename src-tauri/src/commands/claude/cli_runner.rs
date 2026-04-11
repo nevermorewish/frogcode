@@ -2,19 +2,59 @@ use std::fs;
 use std::process::Stdio;
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use crate::commands::context_manager::AutoCompactManager;
 use crate::commands::permission_config::{
     build_execution_args, ClaudeExecutionConfig, ClaudePermissionConfig,
 };
 #[cfg(windows)]
 use crate::process::JobObject;
+use crate::process::{
+    EventSinkExt, ProcessRegistry, ProcessRegistryState, SharedEventSink, TauriEventSink,
+};
 
-use super::config::get_claude_execution_config;
 use super::paths::{encode_project_path, get_claude_dir};
 use super::platform;
+
+/// Dependencies that the Claude CLI runner needs to stream output and manage
+/// process lifecycle. Lets the same streaming/cancel code be driven from a
+/// Tauri `AppHandle` (desktop) or from an Axum + WebSocket handler (web).
+///
+/// Note: we store the `ClaudeProcessState` fields as raw `Arc<Mutex<...>>`
+/// rather than cloning the whole struct. `ClaudeProcessState` has a `Drop`
+/// impl that calls `handle.block_on`, which would deadlock if triggered
+/// from inside a tokio worker task (the desktop singleton only drops at
+/// app exit, so the risk is specific to a cloned per-call copy).
+#[derive(Clone)]
+pub struct ClaudeSpawnDeps {
+    pub sink: SharedEventSink,
+    pub registry: Arc<ProcessRegistry>,
+    pub auto_compact: Option<Arc<AutoCompactManager>>,
+    pub current_process: Arc<Mutex<Option<Child>>>,
+    pub last_spawned_pid: Arc<Mutex<Option<u32>>>,
+}
+
+impl ClaudeSpawnDeps {
+    /// Build deps from a Tauri `AppHandle`, preserving legacy behavior for
+    /// the desktop binary. `AutoCompactState` is gracefully optional.
+    pub fn from_app(app: &AppHandle) -> Self {
+        let registry = app.state::<ProcessRegistryState>().0.clone();
+        let auto_compact = app
+            .try_state::<crate::commands::context_manager::AutoCompactState>()
+            .map(|s| s.inner().0.clone());
+        let claude_state = app.state::<ClaudeProcessState>();
+        Self {
+            sink: Arc::new(TauriEventSink::new(app.clone())),
+            registry,
+            auto_compact,
+            current_process: claude_state.current_process.clone(),
+            last_spawned_pid: claude_state.last_spawned_pid.clone(),
+        }
+    }
+}
 
 /// Global state to track current Claude process
 pub struct ClaudeProcessState {
@@ -283,6 +323,35 @@ pub async fn execute_claude_code(
     max_thinking_tokens: Option<u32>,
     tab_id: Option<String>,
 ) -> Result<(), String> {
+    let deps = ClaudeSpawnDeps::from_app(&app);
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    execute_claude_code_with_deps(
+        deps,
+        &data_dir,
+        project_path,
+        prompt,
+        model,
+        plan_mode,
+        max_thinking_tokens,
+        tab_id,
+    )
+    .await
+}
+
+/// Transport-agnostic `execute_claude_code`. Callable from `frogcode-web`.
+pub async fn execute_claude_code_with_deps(
+    deps: ClaudeSpawnDeps,
+    data_dir: &std::path::Path,
+    project_path: String,
+    prompt: String,
+    model: String,
+    plan_mode: Option<bool>,
+    max_thinking_tokens: Option<u32>,
+    tab_id: Option<String>,
+) -> Result<(), String> {
     let plan_mode = plan_mode.unwrap_or(false);
     log::info!(
         "Starting Claude Code session with project context resume in: {} with model: {}, plan_mode: {}",
@@ -291,10 +360,10 @@ pub async fn execute_claude_code(
         plan_mode
     );
 
-    let claude_path = crate::claude_binary::find_claude_binary(&app)?;
+    let claude_path = crate::claude_binary::find_claude_binary_with_data_dir(data_dir)?;
 
     // 获取当前执行配置
-    let mut execution_config = get_claude_execution_config(app.clone())
+    let mut execution_config = super::config::load_claude_execution_config()
         .await
         .unwrap_or_else(|e| {
             log::warn!("Failed to load execution config, using default: {}", e);
@@ -332,7 +401,7 @@ pub async fn execute_claude_code(
         Some(&mapped_model),
         max_thinking_tokens,
     )?;
-    spawn_claude_process(app, cmd, prompt, model, project_path, tab_id).await
+    spawn_claude_process_with_deps(deps, cmd, prompt, model, project_path, tab_id).await
 }
 
 /// Continue an existing Claude Code conversation with streaming output
@@ -340,6 +409,35 @@ pub async fn execute_claude_code(
 #[tauri::command]
 pub async fn continue_claude_code(
     app: AppHandle,
+    project_path: String,
+    prompt: String,
+    model: String,
+    plan_mode: Option<bool>,
+    max_thinking_tokens: Option<u32>,
+    tab_id: Option<String>,
+) -> Result<(), String> {
+    let deps = ClaudeSpawnDeps::from_app(&app);
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    continue_claude_code_with_deps(
+        deps,
+        &data_dir,
+        project_path,
+        prompt,
+        model,
+        plan_mode,
+        max_thinking_tokens,
+        tab_id,
+    )
+    .await
+}
+
+/// Transport-agnostic `continue_claude_code`. Callable from `frogcode-web`.
+pub async fn continue_claude_code_with_deps(
+    deps: ClaudeSpawnDeps,
+    data_dir: &std::path::Path,
     project_path: String,
     prompt: String,
     model: String,
@@ -355,10 +453,10 @@ pub async fn continue_claude_code(
         plan_mode
     );
 
-    let claude_path = crate::claude_binary::find_claude_binary(&app)?;
+    let claude_path = crate::claude_binary::find_claude_binary_with_data_dir(data_dir)?;
 
     // 获取当前执行配置
-    let mut execution_config = get_claude_execution_config(app.clone())
+    let mut execution_config = super::config::load_claude_execution_config()
         .await
         .unwrap_or_else(|e| {
             log::warn!("Failed to load execution config, using default: {}", e);
@@ -399,7 +497,7 @@ pub async fn continue_claude_code(
         Some(&mapped_model),
         max_thinking_tokens,
     )?;
-    spawn_claude_process(app, cmd, prompt, model, project_path, tab_id).await
+    spawn_claude_process_with_deps(deps, cmd, prompt, model, project_path, tab_id).await
 }
 
 /// Resume an existing Claude Code session by ID with streaming output
@@ -407,6 +505,37 @@ pub async fn continue_claude_code(
 #[tauri::command]
 pub async fn resume_claude_code(
     app: AppHandle,
+    project_path: String,
+    session_id: String,
+    prompt: String,
+    model: String,
+    plan_mode: Option<bool>,
+    max_thinking_tokens: Option<u32>,
+    tab_id: Option<String>,
+) -> Result<(), String> {
+    let deps = ClaudeSpawnDeps::from_app(&app);
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    resume_claude_code_with_deps(
+        deps,
+        &data_dir,
+        project_path,
+        session_id,
+        prompt,
+        model,
+        plan_mode,
+        max_thinking_tokens,
+        tab_id,
+    )
+    .await
+}
+
+/// Transport-agnostic `resume_claude_code`. Callable from `frogcode-web`.
+pub async fn resume_claude_code_with_deps(
+    deps: ClaudeSpawnDeps,
+    data_dir: &std::path::Path,
     project_path: String,
     session_id: String,
     prompt: String,
@@ -435,10 +564,10 @@ pub async fn resume_claude_code(
     log::info!("Expected session file directory: {}", session_dir);
     log::info!("Session ID to resume: {}", session_id);
 
-    let claude_path = crate::claude_binary::find_claude_binary(&app)?;
+    let claude_path = crate::claude_binary::find_claude_binary_with_data_dir(data_dir)?;
 
     // 获取当前执行配置
-    let mut execution_config = get_claude_execution_config(app.clone())
+    let mut execution_config = super::config::load_claude_execution_config()
         .await
         .unwrap_or_else(|e| {
             log::warn!("Failed to load execution config, using default: {}", e);
@@ -484,8 +613,8 @@ pub async fn resume_claude_code(
     )?;
 
     // Try to spawn the process - if it fails, fall back to continue mode
-    match spawn_claude_process(
-        app.clone(),
+    match spawn_claude_process_with_deps(
+        deps.clone(),
         cmd,
         prompt.clone(),
         model.clone(),
@@ -501,8 +630,9 @@ pub async fn resume_claude_code(
                 resume_error
             );
             // Fallback to continue mode
-            continue_claude_code(
-                app,
+            continue_claude_code_with_deps(
+                deps,
+                data_dir,
                 project_path,
                 prompt,
                 model,
@@ -521,6 +651,16 @@ pub async fn cancel_claude_execution(
     app: AppHandle,
     session_id: Option<String>,
 ) -> Result<(), String> {
+    let deps = ClaudeSpawnDeps::from_app(&app);
+    cancel_claude_execution_with_deps(deps, session_id).await
+}
+
+/// Transport-agnostic cancel implementation. Shared between Tauri and the
+/// web server binary.
+pub async fn cancel_claude_execution_with_deps(
+    deps: ClaudeSpawnDeps,
+    session_id: Option<String>,
+) -> Result<(), String> {
     log::info!(
         "Cancelling Claude Code execution for session: {:?}",
         session_id
@@ -531,8 +671,7 @@ pub async fn cancel_claude_execution(
 
     // Method 1: Try to find and kill via ProcessRegistry using session ID
     if let Some(sid) = &session_id {
-        let registry = app.state::<crate::process::ProcessRegistryState>();
-        match registry.0.get_claude_session_by_id(sid) {
+        match deps.registry.get_claude_session_by_id(sid) {
             Ok(Some(process_info)) => {
                 log::info!(
                     "Found process in registry for session {}: run_id={}, PID={}",
@@ -540,7 +679,7 @@ pub async fn cancel_claude_execution(
                     process_info.run_id,
                     process_info.pid
                 );
-                match registry.0.kill_process(process_info.run_id).await {
+                match deps.registry.kill_process(process_info.run_id).await {
                     Ok(success) => {
                         if success {
                             log::info!("Successfully killed process via registry");
@@ -566,8 +705,7 @@ pub async fn cancel_claude_execution(
 
     // Method 2: Try the legacy approach via ClaudeProcessState
     if !killed {
-        let claude_state = app.state::<ClaudeProcessState>();
-        let mut current_process = claude_state.current_process.lock().await;
+        let mut current_process = deps.current_process.lock().await;
 
         if let Some(mut child) = current_process.take() {
             // Try to get the PID before killing
@@ -612,14 +750,13 @@ pub async fn cancel_claude_execution(
 
     // Method 3: Try killing the last spawned PID when session_id is not available
     if !killed {
-        let claude_state = app.state::<ClaudeProcessState>();
-        let last_pid = { *claude_state.last_spawned_pid.lock().await };
+        let last_pid = { *deps.last_spawned_pid.lock().await };
         if let Some(pid) = last_pid {
             log::info!("Attempting to kill Claude process via last spawned PID: {}", pid);
             match platform::kill_process_tree(pid) {
                 Ok(_) => {
                     log::info!("Successfully killed process tree via last spawned PID");
-                    let mut last_pid_guard = claude_state.last_spawned_pid.lock().await;
+                    let mut last_pid_guard = deps.last_spawned_pid.lock().await;
                     if last_pid_guard.as_ref() == Some(&pid) {
                         *last_pid_guard = None;
                     }
@@ -639,15 +776,15 @@ pub async fn cancel_claude_execution(
 
     // Always emit cancellation events for UI consistency
     if let Some(sid) = session_id {
-        let _ = app.emit(&format!("claude-cancelled:{}", sid), true);
+        deps.sink.emit(&format!("claude-cancelled:{}", sid), &true);
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        let _ = app.emit(&format!("claude-complete:{}", sid), false);
+        deps.sink.emit(&format!("claude-complete:{}", sid), &false);
     }
 
     // Also emit generic events for backward compatibility
-    let _ = app.emit("claude-cancelled", true);
+    deps.sink.emit("claude-cancelled", &true);
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    let _ = app.emit("claude-complete", false);
+    deps.sink.emit("claude-complete", &false);
 
     if killed {
         log::info!("Claude process cancellation completed successfully");
@@ -693,6 +830,21 @@ fn is_slash_command(prompt: &str) -> bool {
 /// 🔒 CRITICAL FIX: 添加 tab_id 参数，用于全局事件中标识消息来源，解决新建会话并发时的消息串扰
 async fn spawn_claude_process(
     app: AppHandle,
+    cmd: Command,
+    prompt: String,
+    model: String,
+    project_path: String,
+    tab_id: Option<String>,
+) -> Result<(), String> {
+    let deps = ClaudeSpawnDeps::from_app(&app);
+    spawn_claude_process_with_deps(deps, cmd, prompt, model, project_path, tab_id).await
+}
+
+/// Transport-agnostic spawn function. Takes `ClaudeSpawnDeps` so the same
+/// streaming logic is driven from Tauri (`TauriEventSink`) or from the web
+/// server binary (`WsEventSink`).
+pub async fn spawn_claude_process_with_deps(
+    deps: ClaudeSpawnDeps,
     mut cmd: Command,
     prompt: String,
     model: String,
@@ -806,9 +958,8 @@ async fn spawn_claude_process(
     // 解决：每个进程独立管理自己的 child，取消功能通过 ProcessRegistry 实现
     //
     // ClaudeProcessState 仅作为向后兼容的备选取消机制（存储最新进程的 PID）
-    let claude_state = app.state::<ClaudeProcessState>();
     {
-        let mut current_process = claude_state.current_process.lock().await;
+        let mut current_process = deps.current_process.lock().await;
         // 仅用于记录，不影响进程管理
         if current_process.is_some() {
             log::info!("Another Claude process is running, allowing concurrent sessions");
@@ -817,21 +968,19 @@ async fn spawn_claude_process(
         *current_process = None;
     }
     if pid != 0 {
-        let mut last_pid = claude_state.last_spawned_pid.lock().await;
+        let mut last_pid = deps.last_spawned_pid.lock().await;
         *last_pid = Some(pid);
     }
 
     // Check if auto-compact state is available
-    let auto_compact_available = app
-        .try_state::<crate::commands::context_manager::AutoCompactState>()
-        .is_some();
+    let auto_compact_available = deps.auto_compact.is_some();
 
     // Spawn tasks to read stdout and stderr
-    let app_handle = app.clone();
+    let sink_stdout = deps.sink.clone();
+    let auto_compact_for_stdout = deps.auto_compact.clone();
     let session_id_holder_clone = session_id_holder.clone();
     let run_id_holder_clone = run_id_holder.clone();
-    let registry = app.state::<crate::process::ProcessRegistryState>();
-    let registry_clone = registry.0.clone();
+    let registry_clone = deps.registry.clone();
     let project_path_clone = project_path.clone();
     let prompt_clone = prompt.clone();
     let model_clone = model.clone();
@@ -857,14 +1006,14 @@ async fn spawn_claude_process(
 
                             // Register with auto-compact manager
                             if auto_compact_available {
-                                if let Some(auto_compact_state) = app_handle.try_state::<crate::commands::context_manager::AutoCompactState>() {
-                                    if let Err(e) = auto_compact_state.0.register_session(
-                                    claude_session_id.to_string(),
-                                    project_path_clone.clone(),
-                                    model_clone.clone(),
-                                ) {
-                                    log::warn!("Failed to register session with auto-compact manager: {}", e);
-                                }
+                                if let Some(ref auto_compact_mgr) = auto_compact_for_stdout {
+                                    if let Err(e) = auto_compact_mgr.register_session(
+                                        claude_session_id.to_string(),
+                                        project_path_clone.clone(),
+                                        model_clone.clone(),
+                                    ) {
+                                        log::warn!("Failed to register session with auto-compact manager: {}", e);
+                                    }
                                 }
                             }
 
@@ -900,19 +1049,11 @@ async fn spawn_claude_process(
                                         "pid": pid,
                                         "run_id": run_id,
                                     });
-                                    if let Err(e) =
-                                        app_handle.emit("claude-session-state", &event_payload)
-                                    {
-                                        log::warn!(
-                                            "Failed to emit claude-session-state event: {}",
-                                            e
-                                        );
-                                    } else {
-                                        log::info!(
-                                            "Emitted claude-session-started event for session: {}",
-                                            claude_session_id
-                                        );
-                                    }
+                                    sink_stdout.emit("claude-session-state", &event_payload);
+                                    log::info!(
+                                        "Emitted claude-session-started event for session: {}",
+                                        claude_session_id
+                                    );
 
                                     log::info!(
                                         "Claude CLI will handle project creation for session: {}",
@@ -952,13 +1093,13 @@ async fn spawn_claude_process(
 
                             // Update auto-compact manager with token count
                             if auto_compact_available {
-                                if let Some(auto_compact_state) = app_handle.try_state::<crate::commands::context_manager::AutoCompactState>() {
-                                    let auto_compact_state_clone = auto_compact_state.inner().clone();
+                                if let Some(ref auto_compact_mgr) = auto_compact_for_stdout {
+                                    let auto_compact_clone = auto_compact_mgr.clone();
                                     let session_id_for_compact = session_id_str.clone();
 
                                     // Spawn async task to avoid blocking main output loop
                                     tokio::spawn(async move {
-                                        match auto_compact_state_clone.0.update_session_tokens(&session_id_for_compact, total_tokens).await {
+                                        match auto_compact_clone.update_session_tokens(&session_id_for_compact, total_tokens).await {
                                             Ok(compaction_triggered) => {
                                                 if compaction_triggered {
                                                     log::info!("Auto-compaction triggered for session {}", session_id_for_compact);
@@ -984,18 +1125,18 @@ async fn spawn_claude_process(
 
             // Emit the line to the frontend with session isolation if we have session ID
             if let Some(ref session_id) = *session_id_holder_clone.lock().unwrap() {
-                let _ = app_handle.emit(&format!("claude-output:{}", session_id), &line);
+                sink_stdout.emit(&format!("claude-output:{}", session_id), &line);
             }
             // 🔒 CRITICAL FIX: 全局事件包含 tab_id，用于前端过滤新建会话的消息
             let global_payload = serde_json::json!({
                 "tab_id": tab_id_for_stdout,
                 "payload": &line
             });
-            let _ = app_handle.emit("claude-output", &global_payload);
+            sink_stdout.emit("claude-output", &global_payload);
         }
     });
 
-    let app_handle_stderr = app.clone();
+    let sink_stderr = deps.sink.clone();
     let session_id_holder_clone2 = session_id_holder.clone();
     // 🔒 CRITICAL FIX: 克隆 tab_id 用于 stderr 事件
     let tab_id_for_stderr = tab_id.clone();
@@ -1005,25 +1146,25 @@ async fn spawn_claude_process(
             log::error!("Claude stderr: {}", line);
             // Emit error lines to the frontend with session isolation if we have session ID
             if let Some(ref session_id) = *session_id_holder_clone2.lock().unwrap() {
-                let _ = app_handle_stderr.emit(&format!("claude-error:{}", session_id), &line);
+                sink_stderr.emit(&format!("claude-error:{}", session_id), &line);
             }
             // 🔒 CRITICAL FIX: 全局事件包含 tab_id
             let global_payload = serde_json::json!({
                 "tab_id": tab_id_for_stderr,
                 "payload": &line
             });
-            let _ = app_handle_stderr.emit("claude-error", &global_payload);
+            sink_stderr.emit("claude-error", &global_payload);
         }
     });
 
     // Wait for the process to complete
     // 🔒 CRITICAL FIX: 直接将 child 移动到 wait task 中，而不是从全局 state 取出
     // 这样每个进程独立管理自己的生命周期，支持真正的多会话并发
-    let app_handle_wait = app.clone();
+    let sink_wait = deps.sink.clone();
     let session_id_holder_clone3 = session_id_holder.clone();
     let run_id_holder_clone2 = run_id_holder.clone();
-    let registry_clone2 = registry.0.clone();
-    let last_spawned_pid = claude_state.last_spawned_pid.clone();
+    let registry_clone2 = deps.registry.clone();
+    let last_spawned_pid = deps.last_spawned_pid.clone();
     // 🔒 CRITICAL FIX: 克隆 tab_id 用于 complete 事件
     let tab_id_for_complete = tab_id;
     tokio::spawn(async move {
@@ -1044,17 +1185,19 @@ async fn spawn_claude_process(
                         "status": "stopped",
                         "success": status.success(),
                     });
-                    let _ = app_handle_wait.emit("claude-session-state", &event_payload);
+                    sink_wait.emit("claude-session-state", &event_payload);
 
-                    let _ = app_handle_wait
-                        .emit(&format!("claude-complete:{}", session_id), status.success());
+                    sink_wait.emit(
+                        &format!("claude-complete:{}", session_id),
+                        &status.success(),
+                    );
                 }
                 // 🔒 CRITICAL FIX: 全局事件包含 tab_id
                 let global_payload = serde_json::json!({
                     "tab_id": tab_id_for_complete,
                     "payload": status.success()
                 });
-                let _ = app_handle_wait.emit("claude-complete", &global_payload);
+                sink_wait.emit("claude-complete", &global_payload);
             }
             Err(e) => {
                 log::error!("Failed to wait for Claude process: {}", e);
@@ -1068,17 +1211,16 @@ async fn spawn_claude_process(
                         "success": false,
                         "error": e.to_string(),
                     });
-                    let _ = app_handle_wait.emit("claude-session-state", &event_payload);
+                    sink_wait.emit("claude-session-state", &event_payload);
 
-                    let _ =
-                        app_handle_wait.emit(&format!("claude-complete:{}", session_id), false);
+                    sink_wait.emit(&format!("claude-complete:{}", session_id), &false);
                 }
                 // 🔒 CRITICAL FIX: 全局事件包含 tab_id
                 let global_payload = serde_json::json!({
                     "tab_id": tab_id_for_complete,
                     "payload": false
                 });
-                let _ = app_handle_wait.emit("claude-complete", &global_payload);
+                sink_wait.emit("claude-complete", &global_payload);
             }
         }
 

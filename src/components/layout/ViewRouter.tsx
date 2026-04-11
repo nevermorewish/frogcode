@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Plus } from "lucide-react";
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence, Transition } from "framer-motion"; // ✨ Added for transitions
 import { api, type Project } from "@/lib/api";

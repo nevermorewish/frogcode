@@ -817,6 +817,12 @@ fn clear_binary_override(tool: &str) -> Result<(), String> {
 /// 获取当前Claude执行配置
 #[tauri::command]
 pub async fn get_claude_execution_config(_app: AppHandle) -> Result<ClaudeExecutionConfig, String> {
+    load_claude_execution_config().await
+}
+
+/// Transport-agnostic version of `get_claude_execution_config` — no AppHandle
+/// required, usable from the `frogcode-web` binary.
+pub async fn load_claude_execution_config() -> Result<ClaudeExecutionConfig, String> {
     let claude_dir =
         get_claude_dir().map_err(|e| format!("Failed to get Claude directory: {}", e))?;
     let config_file = claude_dir.join("execution_config.json");

@@ -8,6 +8,13 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "any-code"
+path = "src/main.rs"
+
+[[bin]]
+name = "frogcode-web"
+path = "src/web_main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -53,6 +60,14 @@ walkdir = "2"
 serde_yaml = "0.9"
 once_cell = "1.19"
 urlencoding = "2.1"
+
+# Web server mode (frogcode-web binary)
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+futures-util = "0.3"
+rust-embed = "8"
+clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

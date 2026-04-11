@@ -27,6 +27,10 @@ pub fn init_database(app: &AppHandle) -> SqliteResult<Connection> {
     conn.pragma_update(None, "cache_size", 10000)?; // 10MB 缓存
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "mmap_size", 30000000000i64)?; // 30GB memory-mapped I/O
+    // 🔒 Concurrent-access safety: wait up to 5 seconds when the database is
+    // locked by another process. Required because the desktop (`any-code`)
+    // and web (`frogcode-web`) binaries can share `agents.db` simultaneously.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
     log::info!("✅ SQLite WAL mode enabled with performance optimizations");
 

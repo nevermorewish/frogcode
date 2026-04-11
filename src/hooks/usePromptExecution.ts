@@ -13,7 +13,11 @@
  */
 
 import { useCallback, useRef, useEffect } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+// Routes through the apiAdapter so event subscriptions work in Tauri
+// (pass-through) and in a browser served by `frogcode-web` (DOM CustomEvents
+// bridged from the /ws/exec envelope).
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { compatListen as listen } from '@/lib/apiAdapter';
 import { api, type Session } from '@/lib/api';
 import { translationMiddleware, isSlashCommand, type TranslationResult } from '@/lib/translationMiddleware';
 import type { ClaudeStreamMessage } from '@/types/claude';

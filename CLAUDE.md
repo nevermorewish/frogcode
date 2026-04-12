@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Frog Code** (v5.28.5) — A professional desktop GUI for AI-driven code development, wrapping Claude Code CLI, OpenAI Codex API, and Google Gemini CLI into a unified Tauri application. Licensed AGPL-3.0, targets Windows/macOS/Linux.
+**Frog Code** (v1.0.1) — A professional desktop GUI for AI-driven code development, wrapping Claude Code CLI, OpenAI Codex API, and Google Gemini CLI into a unified Tauri application. Licensed AGPL-3.0, targets Windows/macOS/Linux.
 
 ## Build & Development Commands
 

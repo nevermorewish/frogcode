@@ -242,14 +242,22 @@ fn main() {
                 match commands::platform_bridge::platform_start(state, app_handle_for_platform.clone()).await {
                     Ok(_) => {
                         log::info!("Platform sidecar auto-started");
-                        // Only connect Feishu if the user has explicitly enabled it
-                        // with valid credentials — otherwise leave the sidecar idle
-                        // and ready for OpenClaw controls.
                         if let Ok(cfg) = commands::platform_bridge::platform_get_config().await {
+                            // Only connect Feishu if the user has explicitly enabled it
+                            // with valid credentials — otherwise leave the sidecar idle
+                            // and ready for OpenClaw controls.
                             if cfg.enabled && !cfg.app_id.is_empty() {
                                 let state2 = app_handle_for_platform.state::<PlatformBridgeState>();
                                 let _ = commands::platform_bridge::platform_connect_feishu(state2).await;
                                 log::info!("Feishu auto-connected");
+                            }
+                            // Auto-start OpenClaw gateway if the user opted in.
+                            if cfg.openclaw_auto_start {
+                                let state3 = app_handle_for_platform.state::<PlatformBridgeState>();
+                                match commands::platform_bridge::platform_openclaw_start(state3).await {
+                                    Ok(_) => log::info!("OpenClaw gateway auto-started"),
+                                    Err(e) => log::warn!("OpenClaw gateway auto-start failed: {}", e),
+                                }
                             }
                         }
                     }

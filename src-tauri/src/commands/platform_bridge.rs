@@ -71,6 +71,9 @@ pub struct FeishuConfig {
     /// of which agent handles IM messages.
     #[serde(default = "default_agent_type")]
     pub agent_type: String,
+    /// When true, auto-start the OpenClaw gateway process on app launch.
+    #[serde(default)]
+    pub openclaw_auto_start: bool,
 }
 
 fn default_agent_type() -> String {
@@ -96,6 +99,7 @@ impl Default for FeishuConfig {
             project_path: default_project_path(),
             enabled: false,
             agent_type: default_agent_type(),
+            openclaw_auto_start: false,
         }
     }
 }
@@ -239,6 +243,8 @@ struct PlatformRootConfig {
     enabled: bool,
     #[serde(default = "default_agent_type")]
     agent_type: String,
+    #[serde(default)]
+    openclaw_auto_start: bool,
 }
 
 fn read_config() -> Result<FeishuConfig, String> {
@@ -327,6 +333,7 @@ fn read_config() -> Result<FeishuConfig, String> {
         project_path,
         enabled: root.enabled,
         agent_type: root.agent_type,
+        openclaw_auto_start: root.openclaw_auto_start,
     })
 }
 
@@ -344,6 +351,7 @@ fn write_config(cfg: &FeishuConfig) -> Result<(), String> {
         project_path: cfg.project_path.clone(),
         enabled: cfg.enabled,
         agent_type: cfg.agent_type.clone(),
+        openclaw_auto_start: cfg.openclaw_auto_start,
     };
     let p = dir.join("platform-config.json");
     let raw = serde_json::to_string_pretty(&root).map_err(|e| format!("serialize: {}", e))?;

@@ -4215,11 +4215,11 @@ export const api = {
   // ---------------------------------------------------------------------------
 
   platform: {
-    async getConfig(): Promise<{ appId: string; appSecret: string; projectPath: string; enabled: boolean; agentType?: string }> {
+    async getConfig(): Promise<{ appId: string; appSecret: string; projectPath: string; enabled: boolean; agentType?: string; openclawAutoStart?: boolean }> {
       return await invoke("platform_get_config");
     },
 
-    async saveConfig(config: { appId: string; appSecret: string; projectPath: string; enabled: boolean; agentType?: string }): Promise<void> {
+    async saveConfig(config: { appId: string; appSecret: string; projectPath: string; enabled: boolean; agentType?: string; openclawAutoStart?: boolean }): Promise<void> {
       return await invoke("platform_save_config", { config });
     },
 

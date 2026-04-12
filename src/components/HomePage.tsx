@@ -14,6 +14,7 @@ import {
   Check,
   MessageSquare,
   ExternalLink,
+  Play,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,6 +45,8 @@ interface FeatureCardProps {
   headerRight?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  step?: number;
+  completed?: boolean;
 }
 
 const FeatureCard: React.FC<FeatureCardProps> = ({
@@ -53,16 +56,29 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   headerRight,
   children,
   className,
+  step,
+  completed,
 }) => {
   return (
     <div
       className={cn(
-        'rounded-xl border border-border bg-card p-5 shadow-sm',
+        'rounded-xl border bg-card p-5 shadow-sm transition-colors',
+        completed ? 'border-green-500/30' : 'border-border',
         className
       )}
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
+          {step != null && (
+            <div className={cn(
+              'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold',
+              completed
+                ? 'bg-green-500 text-white'
+                : 'bg-blue-500 text-white'
+            )}>
+              {completed ? <Check className="h-3.5 w-3.5" /> : step}
+            </div>
+          )}
           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-background">
             {icon}
           </div>
@@ -86,12 +102,50 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 
 const DevEnvironmentCard: React.FC<{
   onToast: (message: string, type: 'success' | 'error' | 'info') => void;
-}> = ({ onToast }) => {
+  step?: number;
+}> = ({ onToast, step }) => {
   const { t } = useTranslation();
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installingAll, setInstallingAll] = useState(false);
+
+  // OpenClaw runtime status
+  const [openclawRunning, setOpenclawRunning] = useState<boolean | null>(null);
+  const [openclawStarting, setOpenclawStarting] = useState(false);
+  const [openclawAutoStart, setOpenclawAutoStart] = useState(false);
+
+  const loadOpenclawStatus = useCallback(async () => {
+    try {
+      const s = await api.platform.getOpenclawStatus();
+      setOpenclawRunning(!!(s.active && s.processAlive && s.wsConnected));
+    } catch {
+      setOpenclawRunning(null);
+    }
+  }, []);
+
+  const handleOpenclawStart = useCallback(async () => {
+    setOpenclawStarting(true);
+    try {
+      await api.platform.openclawStart();
+      await loadOpenclawStatus();
+    } catch (e: any) {
+      onToast(`OpenClaw 启动失败: ${e?.message || e}`, 'error');
+    } finally {
+      setOpenclawStarting(false);
+    }
+  }, [loadOpenclawStatus, onToast]);
+
+  const toggleAutoStart = useCallback(async (checked: boolean) => {
+    setOpenclawAutoStart(checked);
+    try {
+      const cfg = await api.platform.getConfig();
+      await api.platform.saveConfig({ ...cfg, openclawAutoStart: checked });
+    } catch (e: any) {
+      onToast(`保存失败: ${e?.message || e}`, 'error');
+      setOpenclawAutoStart(!checked);
+    }
+  }, [onToast]);
 
   const checkTools = useCallback(async () => {
     setLoading(true);
@@ -105,7 +159,15 @@ const DevEnvironmentCard: React.FC<{
 
   useEffect(() => {
     checkTools();
-  }, [checkTools]);
+    loadOpenclawStatus();
+    // Load autostart setting
+    api.platform.getConfig().then((cfg) => {
+      setOpenclawAutoStart(cfg.openclawAutoStart ?? false);
+    }).catch(() => {});
+    // Poll OpenClaw status every 3s
+    const interval = setInterval(loadOpenclawStatus, 3000);
+    return () => clearInterval(interval);
+  }, [checkTools, loadOpenclawStatus]);
 
   const installOne = useCallback(
     async (toolId: string, toolName: string) => {
@@ -164,7 +226,9 @@ const DevEnvironmentCard: React.FC<{
     <FeatureCard
       icon={<Terminal className="h-5 w-5 text-blue-500" />}
       title={t('home.devEnv.title', '开发环境检测')}
-      subtitle={t('home.devEnv.subtitle', '检测必备开发工具的安装情况')}
+      subtitle={t('home.devEnv.subtitle', '检测并一键安装必备开发工具')}
+      step={step}
+      completed={allReady}
       headerRight={
         <div className="flex items-center gap-2">
           {!loading && totalCount > 0 && (
@@ -234,6 +298,7 @@ const DevEnvironmentCard: React.FC<{
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {tools.map((tool) => {
             const isInstalling = installingId === tool.id;
+            const isOpenClaw = tool.id === 'openclaw';
             return (
               <div
                 key={tool.id}
@@ -251,7 +316,18 @@ const DevEnvironmentCard: React.FC<{
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-medium">{tool.name}</div>
-                  {tool.version ? (
+                  {isOpenClaw && tool.installed ? (
+                    <div className="text-[10px] text-muted-foreground">
+                      {openclawRunning ? (
+                        <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+                          {t('home.running', '运行中')}
+                        </span>
+                      ) : (
+                        t('home.installed', '已安装')
+                      )}
+                    </div>
+                  ) : tool.version ? (
                     <div className="truncate text-[10px] text-muted-foreground" title={tool.version}>
                       {tool.version.split('\n')[0]}
                     </div>
@@ -261,6 +337,25 @@ const DevEnvironmentCard: React.FC<{
                     </div>
                   )}
                 </div>
+                {/* OpenClaw: show Start button when installed but not running */}
+                {isOpenClaw && tool.installed && !openclawRunning && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleOpenclawStart}
+                    disabled={openclawStarting}
+                    className="h-6 flex-shrink-0 px-2 text-[10px]"
+                  >
+                    {openclawStarting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <>
+                        <Play className="mr-0.5 h-3 w-3" />
+                        {t('home.start', '启动')}
+                      </>
+                    )}
+                  </Button>
+                )}
                 {!tool.installed && tool.installable && (
                   <Button
                     size="sm"
@@ -284,6 +379,21 @@ const DevEnvironmentCard: React.FC<{
           })}
         </div>
       )}
+
+      {/* OpenClaw autostart checkbox */}
+      {tools.some((t) => t.id === 'openclaw' && t.installed) && (
+        <label className="mt-3 flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 transition-colors hover:bg-muted/30">
+          <input
+            type="checkbox"
+            checked={openclawAutoStart}
+            onChange={(e) => toggleAutoStart(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-border accent-blue-600"
+          />
+          <span className="text-xs text-muted-foreground">
+            {t('home.devEnv.openclawAutoStart', 'OpenClaw 自动启动')}
+          </span>
+        </label>
+      )}
     </FeatureCard>
   );
 };
@@ -294,7 +404,8 @@ const DevEnvironmentCard: React.FC<{
 
 const FrogclawCard: React.FC<{
   onToast: (message: string, type: 'success' | 'error' | 'info') => void;
-}> = ({ onToast }) => {
+  step?: number;
+}> = ({ onToast, step }) => {
   const { t } = useTranslation();
   const { user, isAuthenticated, login, logout, tokens, selectedTokenId, selectToken, openclawModels, feishuAppId } = useAuth();
   const [username, setUsername] = useState('');
@@ -334,7 +445,9 @@ const FrogclawCard: React.FC<{
     <FeatureCard
       icon={<Key className="h-5 w-5 text-emerald-500" />}
       title={t('home.frogclaw.title', 'Frogclaw 连接')}
-      subtitle={t('home.frogclaw.subtitle', '登录并选择 API 令牌')}
+      subtitle={t('home.frogclaw.subtitle', '登录 Frogclaw 获取 API 令牌和 OpenClaw 配置')}
+      step={step}
+      completed={isAuthenticated}
       headerRight={
         isAuthenticated && (
           <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400">
@@ -535,7 +648,7 @@ const ChannelQuickCard: React.FC<ChannelQuickCardProps> = ({
   );
 };
 
-const IMChannelCard: React.FC = () => {
+const IMChannelCard: React.FC<{ step?: number }> = ({ step }) => {
   const { t } = useTranslation();
   const { navigateTo } = useNavigation();
   const bridge = usePlatformStatus();
@@ -558,8 +671,16 @@ const IMChannelCard: React.FC = () => {
     <FeatureCard
       icon={<MessageSquare className="h-5 w-5 text-purple-500" />}
       title={t('home.imChannel.title', 'IM 通道设置')}
-      subtitle={t('home.imChannel.subtitle', '配置消息通知渠道')}
+      subtitle={t('home.imChannel.subtitle', '配置飞书机器人，选择 Claude Code 或 OpenClaw 作为后端')}
+      step={step}
+      completed={feishuConnected}
     >
+      {/* Backend choice hint */}
+      <div className="mb-3 rounded-lg border border-blue-500/20 bg-blue-500/5 px-3 py-2">
+        <p className="text-[11px] leading-relaxed text-blue-700 dark:text-blue-400">
+          {t('home.imChannel.backendHint', '飞书机器人支持两种 AI 后端：Claude Code（使用官方 Claude Max 订阅）或 OpenClaw（通过 Frogclaw 服务器）。在 IM 通道页面中选择并配置。')}
+        </p>
+      </div>
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <ChannelQuickCard
           icon={<FeishuIcon className="h-5 w-5" />}
@@ -605,15 +726,31 @@ export const HomePage: React.FC = () => {
       <div className="container mx-auto max-w-5xl p-6">
         <div className="mb-6">
           <h1 className="text-3xl font-bold tracking-tight">{t('home.title')}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t('home.dashboardSubtitle', '快速访问和配置常用功能')}
-          </p>
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+            <p className="mb-2 text-sm font-medium text-foreground">
+              {t('home.guideTitle', '三步快速上手')}
+            </p>
+            <ol className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+              <li>
+                <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">1</span>
+                {t('home.guideStep1', '安装开发环境 — 检测 Node.js、Git、Claude Code、OpenClaw 等工具，缺少的可一键安装')}
+              </li>
+              <li>
+                <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">2</span>
+                {t('home.guideStep2', '登录 Frogclaw — 输入用户名和密码，自动获取 API 令牌、OpenClaw 模型配置和飞书凭据')}
+              </li>
+              <li>
+                <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">3</span>
+                {t('home.guideStep3', '配置飞书通道 — 选择 Claude Code（官方 Claude Max 订阅）或 OpenClaw 作为 AI 后端，完成后即可在飞书中与 AI 对话编程')}
+              </li>
+            </ol>
+          </div>
         </div>
 
         <div className="flex flex-col gap-5">
-          <DevEnvironmentCard onToast={showToast} />
-          <FrogclawCard onToast={showToast} />
-          <IMChannelCard />
+          <DevEnvironmentCard onToast={showToast} step={1} />
+          <FrogclawCard onToast={showToast} step={2} />
+          <IMChannelCard step={3} />
         </div>
       </div>
 

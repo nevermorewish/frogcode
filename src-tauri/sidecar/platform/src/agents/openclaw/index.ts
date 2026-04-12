@@ -33,7 +33,7 @@ import type {
   SessionKey,
   StartSessionOpts,
 } from '../types.js';
-import { OpenClawProcessManager, type ProcessConfig } from './process.js';
+import { OpenClawProcessManager, type ProcessConfig, killProcessOnPort } from './process.js';
 import { OpenClawWsClient, type WsClientConfig } from './ws-client.js';
 import { OpenClawConfigWriter } from './config-writer.js';
 import { initialConfig } from './migrate.js';
@@ -561,14 +561,15 @@ export class OpenClawAgent implements Agent {
     log('info', `extensionsDir=${extensionsDir}`);
     log('info', `tmpDir=${tmpDir}`);
 
-    // Port preflight — if in use, give it a moment (TIME_WAIT from our own
-    // stop), then re-check. Without --force we rely on reapOrphanFromPidFile
-    // in process.ts to handle stale listeners from crashed previous runs.
+    // Port preflight — if in use, actively kill the holder so we can bind.
     if (await isPortInUse(port)) {
-      log('info', `port ${port} appears in use; waiting 2s for release...`);
-      await new Promise((r) => setTimeout(r, 2000));
+      log('info', `port ${port} in use; killing occupying process...`);
+      killProcessOnPort(port, (msg) => log('info', msg));
+      // Re-check after kill
       if (await isPortInUse(port)) {
-        log('warn', `port ${port} still in use; reapOrphanFromPidFile will try to recover`);
+        log('warn', `port ${port} still in use after kill attempt; spawn may fail`);
+      } else {
+        log('info', `port ${port} released successfully`);
       }
     }
 

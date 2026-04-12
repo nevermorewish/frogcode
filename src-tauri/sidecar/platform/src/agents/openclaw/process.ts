@@ -357,6 +357,83 @@ function clearPidFile(stateDir: string): void {
 }
 
 /**
+ * Find the PID holding a TCP port and kill it. Cross-platform:
+ *   - Windows: netstat -ano → taskkill /f /t
+ *   - Unix:    lsof -ti → SIGKILL
+ * Returns true if a process was killed.
+ */
+export function killProcessOnPort(
+  port: number,
+  logFn: (msg: string) => void,
+): boolean {
+  const { execSync } = require('node:child_process') as typeof import('node:child_process');
+
+  let pids: number[] = [];
+
+  try {
+    if (process.platform === 'win32') {
+      // netstat output: "  TCP    0.0.0.0:18789    0.0.0.0:0    LISTENING    1234"
+      const out = execSync(`netstat -ano | findstr :${port}`, {
+        encoding: 'utf8',
+        timeout: 5000,
+        windowsHide: true,
+      });
+      for (const line of out.split('\n')) {
+        if (/LISTENING/i.test(line)) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parseInt(parts[parts.length - 1], 10);
+          if (pid > 0 && !pids.includes(pid)) pids.push(pid);
+        }
+      }
+    } else {
+      // lsof -ti :port returns one PID per line
+      const out = execSync(`lsof -ti :${port}`, {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      for (const line of out.split('\n')) {
+        const pid = parseInt(line.trim(), 10);
+        if (pid > 0 && !pids.includes(pid)) pids.push(pid);
+      }
+    }
+  } catch {
+    // Command failed — port may not be in use or command not available
+    return false;
+  }
+
+  if (pids.length === 0) return false;
+
+  for (const pid of pids) {
+    logFn(`killing process pid=${pid} occupying port ${port}`);
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /f /t /pid ${pid}`, {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+        });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch (e: any) {
+      logFn(`failed to kill pid=${pid}: ${e.message}`);
+    }
+  }
+
+  // Brief wait for port release
+  try {
+    execSync(
+      process.platform === 'win32'
+        ? 'timeout /t 2 /nobreak > nul'
+        : 'sleep 1',
+      { stdio: 'ignore', timeout: 5000 },
+    );
+  } catch { /* ignore */ }
+
+  return true;
+}
+
+/**
  * Read the PID file from a previous run. If that PID is still alive, kill it.
  * This handles the Windows case where child processes outlive their parent.
  */

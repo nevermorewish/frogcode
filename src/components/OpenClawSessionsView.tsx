@@ -2,11 +2,11 @@
  * OpenClaw Sessions Browser
  *
  * Two-pane view: session list (left) + message detail (right).
- * Reads from ~/.anycode/openclaw/agents/{botId}/sessions/*.jsonl via
+ * Reads from ~/.frogcode/openclaw/agents/{botId}/sessions/*.jsonl via
  * platform sidecar → Rust Tauri commands.
  */
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { MessageSquare, RefreshCw, User, Bot, Clock, AlertCircle, Inbox, CheckCircle2, XCircle, Loader2, Play, Square, RotateCcw, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { MessageSquare, RefreshCw, User, Bot, Clock, AlertCircle, Inbox, CheckCircle2, XCircle, Loader2, Play, Square, RotateCcw, FileText, ChevronDown, ChevronUp, FolderOpen } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -206,6 +206,9 @@ export const OpenClawSessionsView: React.FC = () => {
   const [controlBusy, setControlBusy] = useState<'start' | 'stop' | 'restart' | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
+  const [historySessions, setHistorySessions] = useState<Array<{ id: string; botId: string; title: string; messageCount: number; lastMessageAt: string | null; createdAt: string; filePath: string }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistoryPath, setSelectedHistoryPath] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -279,6 +282,19 @@ export const OpenClawSessionsView: React.FC = () => {
     }
   }, []);
 
+  const importHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setError(null);
+    try {
+      const result = await api.openclawHistory.scanSessions();
+      setHistorySessions(result);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadSessions();
     loadStatus();
@@ -299,6 +315,30 @@ export const OpenClawSessionsView: React.FC = () => {
       setDetail(null);
       return;
     }
+
+    // If this is a history session, load from disk
+    if (selectedHistoryPath) {
+      let cancelled = false;
+      setDetailLoading(true);
+      api.openclawHistory
+        .loadSession(selectedHistoryPath)
+        .then((result) => {
+          if (cancelled) return;
+          setDetail({
+            summary: result.summary as unknown as SessionSummary,
+            messages: result.messages as ChatMessage[],
+          });
+        })
+        .catch((e) => {
+          if (!cancelled) setError(String(e?.message || e));
+        })
+        .finally(() => {
+          if (!cancelled) setDetailLoading(false);
+        });
+      return () => { cancelled = true; };
+    }
+
+    // Otherwise load from sidecar
     let cancelled = false;
     setDetailLoading(true);
     api.platform
@@ -327,7 +367,7 @@ export const OpenClawSessionsView: React.FC = () => {
         <div>
           <h1 className="text-xl font-semibold text-foreground">OpenClaw Sessions</h1>
           <p className="mt-0.5 text-[12px] text-muted-foreground">
-            Conversation history from <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">~/.anycode/openclaw/agents/*</code>
+            Conversation history from <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">~/.frogcode/openclaw/agents/*</code>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -378,6 +418,19 @@ export const OpenClawSessionsView: React.FC = () => {
               </Button>
             </>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={importHistory}
+            disabled={historyLoading}
+          >
+            {historyLoading ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            导入历史
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -528,7 +581,7 @@ export const OpenClawSessionsView: React.FC = () => {
             </div>
           )}
 
-          {!loading && sessions.length === 0 && !error && (
+          {!loading && sessions.length === 0 && historySessions.length === 0 && !error && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
               <Inbox className="h-10 w-10 text-muted-foreground/40" />
               <div className="text-[12px] text-muted-foreground">
@@ -536,6 +589,7 @@ export const OpenClawSessionsView: React.FC = () => {
               </div>
               <div className="text-[11px] text-muted-foreground/70">
                 Sessions will appear here once OpenClaw processes messages from Feishu.
+                You can also click "导入历史" to load sessions from disk.
               </div>
             </div>
           )}
@@ -546,15 +600,59 @@ export const OpenClawSessionsView: React.FC = () => {
                 <SessionItem
                   key={s.id}
                   session={s}
-                  selected={selectedId === s.id}
-                  onClick={() => setSelectedId(s.id)}
+                  selected={selectedId === s.id && !selectedHistoryPath}
+                  onClick={() => { setSelectedId(s.id); setSelectedHistoryPath(null); }}
                 />
               ))}
+              {historySessions.length > 0 && (
+                <>
+                  <div className="flex items-center gap-2 py-1.5">
+                    <div className="h-px flex-1 bg-border" />
+                    <span className="text-[10px] font-medium text-muted-foreground">历史 ({historySessions.length})</span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+                  {historySessions.map((hs) => (
+                    <button
+                      key={`history-${hs.id}`}
+                      type="button"
+                      onClick={() => { setSelectedId(hs.id); setSelectedHistoryPath(hs.filePath); }}
+                      className={cn(
+                        'w-full rounded-lg border p-3 text-left transition-colors',
+                        selectedId === hs.id && selectedHistoryPath
+                          ? 'border-primary/40 bg-primary/5'
+                          : 'border-border hover:bg-accent/50',
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">历史</span>
+                            <span className="truncate text-[13px] font-medium text-foreground">
+                              {truncate(hs.title, 40)}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{hs.botId}</span>
+                            <span className="flex items-center gap-1">
+                              <MessageSquare className="h-3 w-3" />
+                              {hs.messageCount}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0 text-[10px] text-muted-foreground">
+                          {formatRelative(hs.lastMessageAt)}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           </div>
 
           <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-            {sessions.length} session{sessions.length !== 1 ? 's' : ''}
+            {sessions.length + historySessions.length} session{(sessions.length + historySessions.length) !== 1 ? 's' : ''}
+            {historySessions.length > 0 && ` (${historySessions.length} 历史)`}
           </div>
         </div>
 

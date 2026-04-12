@@ -1,7 +1,7 @@
 /**
  * First-run config bootstrap for the OpenClaw adapter.
  *
- * Priority for producing the initial ~/.anycode/openclaw/config/openclaw.json:
+ * Priority for producing the initial ~/.frogcode/openclaw/config/openclaw.json:
  *   1. If the user has an existing ~/.openclaw/openclaw.json (from the
  *      standalone openclaw CLI), copy it and rewrite paths so extensions,
  *      workspace, and plugin-install metadata all live under frogcode's
@@ -12,7 +12,7 @@
  *
  * Path rewriting is greedy but distinctive: every string value containing
  * `\.openclaw\` or `/.openclaw/` has that segment replaced with the
- * equivalent `\.anycode\openclaw\state\`. `plugins.load.paths` is then
+ * equivalent `\.frogcode\openclaw\state\`. `plugins.load.paths` is then
  * collapsed to a single entry pointing at the new extensions dir —
  * openclaw auto-discovers plugins inside it, matching nexu's convention.
  */
@@ -42,7 +42,7 @@ function rewritePathString(s: string): string {
   // Capture the two separators so we preserve the input's style.
   return s.replace(/([\\/])\.openclaw([\\/])/g, (_m, sepBefore: string, sepAfter: string) => {
     // Use sepBefore as the separator for all three new path segments
-    return `${sepBefore}.anycode${sepBefore}openclaw${sepBefore}state${sepAfter}`;
+    return `${sepBefore}.frogcode${sepBefore}openclaw${sepBefore}state${sepAfter}`;
   });
 }
 
@@ -82,7 +82,7 @@ function loadLegacyConfig(): Record<string, any> | null {
 
 /**
  * Apply frogcode-specific fixups to a config object in-place:
- *   - Rewrite all `.openclaw` path segments to `.anycode/openclaw/state`
+ *   - Rewrite all `.openclaw` path segments to `.frogcode/openclaw/state`
  *   - Collapse `plugins.load.paths` to a single entry pointing at
  *     frogcode's extensionsDir (discovery-based, matches nexu)
  *   - Normalize `agents.defaults.workspace` to the new state/workspace

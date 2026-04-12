@@ -262,7 +262,7 @@ async fn rest_get_claude_session_output(
 
 // ---------------------------------------------------------------------------
 // Platform / Feishu config (shared with the desktop binary via
-// `~/.anycode/platform-config.json` + `~/.anycode/agents/{type}.json`)
+// `~/.frogcode/platform-config.json` + `~/.frogcode/agents/{type}.json`)
 // ---------------------------------------------------------------------------
 
 async fn rest_platform_get_config(
@@ -861,7 +861,7 @@ pub fn build_router(state: WebAppState) -> Router {
             "/api/sessions/{session_id}/output",
             get(rest_get_claude_session_output),
         )
-        // Platform / Feishu config (shared with desktop via ~/.anycode/)
+        // Platform / Feishu config (shared with desktop via ~/.frogcode/)
         .route(
             "/api/platform/config",
             get(rest_platform_get_config).post(rest_platform_save_config),

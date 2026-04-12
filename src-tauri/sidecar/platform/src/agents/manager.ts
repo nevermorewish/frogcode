@@ -31,7 +31,7 @@ import { makeSessionKey } from './types.js';
 
 const sessionsDir = path.join(
   process.env.HOME || process.env.USERPROFILE || '',
-  '.anycode',
+  '.frogcode',
   'platform-sessions',
 );
 

@@ -4295,6 +4295,19 @@ export const api = {
   },
 
   /**
+   * OpenClaw history session reader (direct disk access, no sidecar needed)
+   */
+  openclawHistory: {
+    async scanSessions(): Promise<Array<{ id: string; botId: string; title: string; messageCount: number; lastMessageAt: string | null; createdAt: string; filePath: string }>> {
+      return await invoke("scan_openclaw_history_sessions");
+    },
+
+    async loadSession(filePath: string): Promise<{ summary: { id: string; botId: string; title: string; messageCount: number; lastMessageAt: string | null; createdAt: string; filePath: string }; messages: Array<{ id: string; role: string; content: any; createdAt: string | null; timestamp: number | null }> }> {
+      return await invoke("load_openclaw_history_session", { filePath });
+    },
+  },
+
+  /**
    * Gets Gemini CLI configuration
    * @returns Promise resolving to Gemini configuration
    */

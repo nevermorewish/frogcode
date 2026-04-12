@@ -4,8 +4,8 @@
 //! 这解决了禁用工具后刷新页面导致工具消失的问题。
 //!
 //! ## 存储位置
-//! - Windows: %USERPROFILE%\.anycode\mcp-registry.json
-//! - macOS/Linux: ~/.anycode/mcp-registry.json
+//! - Windows: %USERPROFILE%\.frogcode\mcp-registry.json
+//! - macOS/Linux: ~/.frogcode/mcp-registry.json
 //!
 //! ## 数据结构
 //! ```json
@@ -51,7 +51,7 @@ pub struct McpRegistry {
 /// 获取注册表文件路径
 fn registry_path() -> PathBuf {
     let home_dir = dirs::home_dir().expect("Failed to get home directory");
-    home_dir.join(".anycode").join("mcp-registry.json")
+    home_dir.join(".frogcode").join("mcp-registry.json")
 }
 
 /// 确保注册表目录存在

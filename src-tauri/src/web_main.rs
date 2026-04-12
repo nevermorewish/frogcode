@@ -65,18 +65,18 @@ fn default_data_dir() -> PathBuf {
     // read/write the same agents.db.
     //
     // Tauri's `app_data_dir` resolves to:
-    //   * Windows: %APPDATA%\com.any-code.app   (but actual frogcode uses
+    //   * Windows: %APPDATA%\com.frog-code.app   (but actual frogcode uses
     //     the `productName` from tauri.conf.json)
     //   * macOS: ~/Library/Application Support/<productName>
     //   * Linux: ~/.config/<productName>
     //
-    // In practice the desktop app writes to `~/.anycode/` based on the
-    // existing `~/.anycode` references in the codebase. We default to that
+    // In practice the desktop app writes to `~/.frogcode/` based on the
+    // existing `~/.frogcode` references in the codebase. We default to that
     // to keep both binaries pointed at the same place.
     if let Some(home) = dirs::home_dir() {
-        home.join(".anycode")
+        home.join(".frogcode")
     } else {
-        PathBuf::from(".anycode")
+        PathBuf::from(".frogcode")
     }
 }
 

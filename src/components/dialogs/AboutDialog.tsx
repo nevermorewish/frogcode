@@ -56,7 +56,7 @@ export function AboutDialog({ open, onClose, onCheckUpdate }: AboutDialogProps) 
           <div className="mx-auto mb-4 inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10">
             <Info className="w-8 h-8 text-primary" />
           </div>
-          <DialogTitle className="text-xl">Any Code</DialogTitle>
+          <DialogTitle className="text-xl">Frog Code</DialogTitle>
           <DialogDescription className="flex items-center justify-center gap-2">
             <span>{t('about.version')}:</span>
             <span className="font-mono font-semibold text-primary">
@@ -96,7 +96,7 @@ export function AboutDialog({ open, onClose, onCheckUpdate }: AboutDialogProps) 
         {/* Footer */}
         <div className="pt-4 border-t border-border text-center">
           <p className="text-xs text-muted-foreground">
-            © 2025 Any Code. All rights reserved.
+            © 2025 Frog Code. All rights reserved.
           </p>
         </div>
       </DialogContent>

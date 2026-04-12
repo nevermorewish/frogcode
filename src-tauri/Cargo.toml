@@ -1,15 +1,16 @@
 [package]
-name = "any-code"
+name = "frog-code"
 version = "5.28.5"
-description = "Any Code - Professional desktop application and toolkit for AI CLI"
+description = "Frog Code - Professional desktop application and toolkit for AI CLI"
 authors = ["mufeedvh", "123vviekr"]
 license = "AGPL-3.0"
 edition = "2021"
+default-run = "frog-code"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[bin]]
-name = "any-code"
+name = "frog-code"
 path = "src/main.rs"
 
 [[bin]]

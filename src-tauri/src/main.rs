@@ -17,7 +17,9 @@ use claude_binary::init_shell_environment;
 use std::sync::{Arc, Mutex};
 
 use commands::auth::{login_to_frogclaw, fetch_frogclaw_providers, apply_openclaw_config};
+use commands::default_skills::{install_default_skills, install_openclaw_defaults};
 use commands::home::{check_tools_installed, install_tool};
+use commands::openclaw_history::{scan_openclaw_history_sessions, load_openclaw_history_session};
 use commands::platform_bridge::{
     platform_connect_feishu, platform_get_agent_config, platform_get_config,
     platform_get_openclaw_session, platform_get_openclaw_status, platform_list_openclaw_sessions,
@@ -202,6 +204,13 @@ fn main() {
             // Initialize shell environment for macOS GUI applications
             // This must be done early to ensure CLI tools (claude, codex, etc.) can be found
             init_shell_environment();
+
+            if let Err(e) = install_default_skills(&app.handle()) {
+                log::warn!("Default skill install failed: {}", e);
+            }
+            if let Err(e) = install_openclaw_defaults(&app.handle()) {
+                log::warn!("OpenClaw defaults install failed: {}", e);
+            }
 
             // Initialize database for storage operations
             let conn = init_database(&app.handle()).expect("Failed to initialize database");
@@ -601,6 +610,9 @@ fn main() {
             // Home page tool detection
             check_tools_installed,
             install_tool,
+            // OpenClaw history session reader
+            scan_openclaw_history_sessions,
+            load_openclaw_history_session,
             // Platform Bridge (Feishu + multi-CLI adapter)
             platform_get_config,
             platform_save_config,

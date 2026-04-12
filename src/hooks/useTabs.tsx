@@ -508,7 +508,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
         tabId: tab.id,
         sessionId: tab.session?.id,
         projectPath: tab.projectPath,
-        title: `${tab.title} - Any Code`,
+        title: `${tab.title} - Frog Code`,
         engine: tab.session?.engine,
       });
 
@@ -555,7 +555,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
         tabId: newTabId,
         sessionId: session?.id,
         projectPath: projectPath || session?.project_path,
-        title: `${title} - Any Code`,
+        title: `${title} - Frog Code`,
         engine: session?.engine,
       });
 

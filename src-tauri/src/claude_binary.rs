@@ -829,7 +829,7 @@ mod fnm_multishell_tests {
 
     #[test]
     fn finds_candidates_in_subdirectories() {
-        let base = std::env::temp_dir().join(format!("any-code-fnm-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("frog-code-fnm-test-{}", std::process::id()));
         let local_appdata = base.to_string_lossy().to_string();
 
         let multishells = base.join("fnm_multishells");

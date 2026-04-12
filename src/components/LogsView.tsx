@@ -2,8 +2,8 @@
  * LogsView — Multi-tab log viewer for platform sidecar + future log sources.
  *
  * Reads from:
- *   - Platform sidecar log: ~/.anycode/platform-sidecar.log (via platform_read_log)
- *   - Tauri app log: AppData/any-code/logs/ (via read_app_log)
+ *   - Platform sidecar log: ~/.frogcode/platform-sidecar.log (via platform_read_log)
+ *   - Tauri app log: AppData/frog-code/logs/ (via read_app_log)
  *
  * Features: auto-refresh, scroll-to-bottom, open in file explorer, search filter,
  *           category filter chips (openclaw, feishu, sidecar, auth).

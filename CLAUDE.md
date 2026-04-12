@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Any Code** (v5.28.5) — A professional desktop GUI for AI-driven code development, wrapping Claude Code CLI, OpenAI Codex API, and Google Gemini CLI into a unified Tauri application. Licensed AGPL-3.0, targets Windows/macOS/Linux.
+**Frog Code** (v5.28.5) — A professional desktop GUI for AI-driven code development, wrapping Claude Code CLI, OpenAI Codex API, and Google Gemini CLI into a unified Tauri application. Licensed AGPL-3.0, targets Windows/macOS/Linux.
 
 ## Build & Development Commands
 
@@ -95,5 +95,5 @@ Manual chunks configured in `vite.config.ts`: `react-vendor`, `ui-vendor`, `edit
 ## Data Storage
 
 - Session data: `~/.claude/projects/` (JSONL format)
-- App settings: `~/.anycode/` (JSON configs)
+- App settings: `~/.frogcode/` (JSON configs)
 - Translation/usage caches: SQLite via Rust backend

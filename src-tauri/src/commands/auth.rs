@@ -10,7 +10,7 @@ const FROGCLAW_BASE_URL: &str = "https://frogclaw.com";
 /// "日志" (Logs) page alongside other lifecycle events.
 fn auth_log(event: &str, detail: &str) {
     let Some(home) = dirs::home_dir() else { return };
-    let path = home.join(".anycode").join("platform-sidecar.log");
+    let path = home.join(".frogcode").join("platform-sidecar.log");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -289,7 +289,7 @@ pub async fn apply_openclaw_config(config_json: String) -> Result<(), String> {
         .map_err(|e| format!("Invalid JSON: {}", e))?;
 
     let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
-    let config_dir = home.join(".anycode").join("openclaw").join("config");
+    let config_dir = home.join(".frogcode").join("openclaw").join("config");
     let config_path = config_dir.join("openclaw.json");
 
     std::fs::create_dir_all(&config_dir)

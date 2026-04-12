@@ -1,6 +1,6 @@
 /**
  * IM Channels View — unified IM config management.
- * All channels stored in ~/.anycode/im-channels.json.
+ * All channels stored in ~/.frogcode/im-channels.json.
  * Claude Code and OpenClaw can each have one channel assigned.
  */
 import React, { useEffect, useState, useCallback } from 'react';

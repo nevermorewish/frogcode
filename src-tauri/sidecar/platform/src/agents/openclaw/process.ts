@@ -287,7 +287,7 @@ export class OpenClawProcessManager extends EventEmitter {
           `This usually means a global openclaw install is running as a Windows ` +
           `scheduled task ("OpenClaw Gateway"). Stop it with: ` +
           `schtasks /End /TN "OpenClaw Gateway"   or   openclaw gateway stop. ` +
-          `You can also change frogcode's gatewayPort in ~/.anycode/agents/openclaw.json.`
+          `You can also change frogcode's gatewayPort in ~/.frogcode/agents/openclaw.json.`
         );
       }
       if (line.includes('gateway already running')) {
@@ -303,7 +303,7 @@ export class OpenClawProcessManager extends EventEmitter {
         );
       }
       if (line.includes('ENOENT') || line.includes('not found')) {
-        return `openclaw binary not found — check binPath in ~/.anycode/agents/openclaw.json`;
+        return `openclaw binary not found — check binPath in ~/.frogcode/agents/openclaw.json`;
       }
     }
     return null;

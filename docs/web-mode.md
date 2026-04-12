@@ -15,7 +15,7 @@
 - **Claude Code 会话** (execute / continue / resume / cancel)
 - **项目 & 会话列表** / 历史加载
 - **OpenClaw** (通过反向代理 + Tauri 命令 REST 化)
-- **飞书 / Platform 配置** (与桌面版共享 `~/.anycode/` 下的配置文件)
+- **飞书 / Platform 配置** (与桌面版共享 `~/.frogcode/` 下的配置文件)
 - **Frogclaw 登录** (纯 HTTP 透传)
 
 ### v1 不支持
@@ -55,7 +55,7 @@
                                             claude CLI 子进程
 ```
 
-- **桌面** (`any-code.exe`):Tauri GUI,全部功能,使用 `TauriEventSink` 向
+- **桌面** (`frog-code.exe`):Tauri GUI,全部功能,使用 `TauriEventSink` 向
   `AppHandle.emit()` 发事件。
 - **Web** (`frogcode-web.exe`):Axum HTTP + WS,Claude + OpenClaw 子集,
   使用 `WsEventSink` 向每个 WS 连接的 mpsc channel 发事件。
@@ -168,7 +168,7 @@ app 退出时触发(运行时外),但 web 模式下会被创建/丢弃多次。
 - Cancel 走 `ProcessRegistry.kill_process(run_id)`,和桌面版一个
   代码路径,零分支
 
-### Platform / Feishu 配置 (与桌面共享 `~/.anycode/`)
+### Platform / Feishu 配置 (与桌面共享 `~/.frogcode/`)
 
 | 方法 | 路径 | 映射 |
 |---|---|---|
@@ -264,9 +264,9 @@ UI 侧靠 feature flag 隐藏入口。
 ### 存储布局 (v5.29)
 
 ```
-~/.anycode/platform-config.json          ← 只存 projectPath / enabled / agentType
-~/.anycode/agents/claudecode.json        ← { binPath, ..., feishu: { appId, appSecret } }
-~/.anycode/agents/openclaw.json          ← { binPath, ..., feishu: { appId, appSecret } }
+~/.frogcode/platform-config.json          ← 只存 projectPath / enabled / agentType
+~/.frogcode/agents/claudecode.json        ← { binPath, ..., feishu: { appId, appSecret } }
+~/.frogcode/agents/openclaw.json          ← { binPath, ..., feishu: { appId, appSecret } }
 ```
 
 ### 读写路径
@@ -323,18 +323,18 @@ UI 侧靠 feature flag 隐藏入口。
 npm run web:build
 
 # 桌面版(必须带 custom-protocol feature,否则 release build 会尝试连 localhost:1420)
-cd src-tauri && cargo build --release --bin any-code --features custom-protocol
+cd src-tauri && cargo build --release --bin frog-code --features custom-protocol
 ```
 
 ### 启动
 
 ```bash
 # 1) 先启动 sidecar(通过桌面版或手动)
-#    桌面版方式:运行 any-code.exe,系统托盘会自动 spawn sidecar
+#    桌面版方式:运行 frog-code.exe,系统托盘会自动 spawn sidecar
 #    手动方式:
 node src-tauri/binaries/frogcode-platform-sidecar.cjs \
   --port 7890 \
-  --config "%USERPROFILE%\.anycode\platform-config.json"
+  --config "%USERPROFILE%\.frogcode\platform-config.json"
 
 # 2) 启动 web 服务器,指向 sidecar
 ./src-tauri/target/release/frogcode-web.exe \
@@ -353,7 +353,7 @@ frogcode-web [OPTIONS]
 
   -p, --port <PORT>              监听端口 [default: 8080]
   -H, --host <HOST>              绑定地址 [default: 0.0.0.0]
-      --data-dir <PATH>          数据目录 [default: ~/.anycode]
+      --data-dir <PATH>          数据目录 [default: ~/.frogcode]
       --openclaw-url <URL>       外部 Node sidecar 基址(没配则 platform_* 全报错)
 ```
 
@@ -384,7 +384,7 @@ release 模式必须启用 `custom-protocol` feature 才会从内嵌资源加载
 
 **修复:**
 ```bash
-cargo build --release --bin any-code --features custom-protocol
+cargo build --release --bin frog-code --features custom-protocol
 ```
 
 ### 9.3 `ClaudeProcessState::Drop` 死锁(已在 §4 描述)
@@ -446,7 +446,7 @@ web 模式不能控制 sidecar 生命周期,`platform_start` 只是一个 `/heal
 才知道实际端口。Web 版必须在启动时通过 `--openclaw-url` 手动传,无法自动发现。
 
 **可选改进:** 让桌面版把当前 sidecar 端口写到
-`~/.anycode/platform-sidecar.port` 文件,web 版启动时读取。
+`~/.frogcode/platform-sidecar.port` 文件,web 版启动时读取。
 
 ### 10.3 还没路由的 Tauri 命令
 

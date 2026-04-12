@@ -29,13 +29,13 @@ pub struct InstallResult {
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Get the log file path: ~/.anycode/install.log
+/// Get the log file path: ~/.frogcode/install.log
 fn get_log_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let home = std::env::var("USERPROFILE").ok()?;
     #[cfg(not(target_os = "windows"))]
     let home = std::env::var("HOME").ok()?;
-    let dir = std::path::PathBuf::from(home).join(".anycode");
+    let dir = std::path::PathBuf::from(home).join(".frogcode");
     let _ = std::fs::create_dir_all(&dir);
     Some(dir.join("install.log"))
 }

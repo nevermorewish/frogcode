@@ -326,7 +326,7 @@ src-tauri/src/commands/
   <ul>
     <li><code>im_bridge_start</code> → spawn node sidecar</li>
     <li><code>im_bridge_stop</code> → kill</li>
-    <li><code>im_bridge_get/save_config</code> → 读写 <code>~/.anycode/im-config.json</code></li>
+    <li><code>im_bridge_get/save_config</code> → 读写 <code>~/.frogcode/im-config.json</code></li>
     <li><code>im_bridge_status</code> → 询问 sidecar <code>/health</code></li>
     <li>SSE 转发 <code>im-bridge:*</code> 到前端</li>
   </ul>
@@ -336,7 +336,7 @@ src-tauri/src/commands/
 <section id="config">
 <h2><span class="n">6.</span>配置扩展</h2>
 
-<pre><span class="c">// ~/.anycode/im-config.json</span>
+<pre><span class="c">// ~/.frogcode/im-config.json</span>
 {
   <span class="f">"appId"</span>: <span class="s">"..."</span>,
   <span class="f">"appSecret"</span>: <span class="s">"..."</span>,
@@ -353,7 +353,7 @@ src-tauri/src/commands/
     },
     <span class="f">"openclaw"</span>: {
       <span class="f">"binPath"</span>: <span class="k">null</span>,             <span class="c">// null = which openclaw / npx</span>
-      <span class="f">"stateDir"</span>: <span class="s">"~/.anycode/openclaw"</span>,
+      <span class="f">"stateDir"</span>: <span class="s">"~/.frogcode/openclaw"</span>,
       <span class="f">"gatewayToken"</span>: <span class="k">null</span>
     }
   }
@@ -533,10 +533,10 @@ src-tauri/src/commands/
   <td><strong>配置存放</strong></td>
   <td><strong>Rust 管写入</strong>；配置文件<strong>拆开</strong></td>
   <td>
-    <code>~/.anycode/im-config.json</code> — 飞书 + agentType（基础）<br>
-    <code>~/.anycode/agents/claudecode.json</code> — Claude Code 专属<br>
-    <code>~/.anycode/agents/openclaw.json</code> — OpenClaw 专属（binPath、stateDir 等）<br>
-    <code>~/.anycode/openclaw/</code> — openclaw runtime 状态（identity、sessions、device-auth），仿 nexu
+    <code>~/.frogcode/im-config.json</code> — 飞书 + agentType（基础）<br>
+    <code>~/.frogcode/agents/claudecode.json</code> — Claude Code 专属<br>
+    <code>~/.frogcode/agents/openclaw.json</code> — OpenClaw 专属（binPath、stateDir 等）<br>
+    <code>~/.frogcode/openclaw/</code> — openclaw runtime 状态（identity、sessions、device-auth），仿 nexu
   </td>
 </tr>
 <tr>
@@ -553,7 +553,7 @@ src-tauri/src/commands/
 
 <h3 style="margin-top:28px">配置文件示例</h3>
 
-<pre><span class="c">// ~/.anycode/im-config.json  — 基础配置</span>
+<pre><span class="c">// ~/.frogcode/im-config.json  — 基础配置</span>
 {
   <span class="f">"appId"</span>: <span class="s">"cli_xxx"</span>,
   <span class="f">"appSecret"</span>: <span class="s">"..."</span>,
@@ -562,17 +562,17 @@ src-tauri/src/commands/
   <span class="f">"agentType"</span>: <span class="s">"claudecode"</span>     <span class="c">// 切 CLI 就改这里</span>
 }
 
-<span class="c">// ~/.anycode/agents/claudecode.json</span>
+<span class="c">// ~/.frogcode/agents/claudecode.json</span>
 {
   <span class="f">"binPath"</span>: <span class="k">null</span>,
   <span class="f">"extraArgs"</span>: [],
   <span class="f">"mode"</span>: <span class="s">"default"</span>
 }
 
-<span class="c">// ~/.anycode/agents/openclaw.json</span>
+<span class="c">// ~/.frogcode/agents/openclaw.json</span>
 {
   <span class="f">"binPath"</span>: <span class="k">null</span>,            <span class="c">// null → PATH / npx 查找，找不到报错</span>
-  <span class="f">"stateDir"</span>: <span class="s">"~/.anycode/openclaw"</span>,
+  <span class="f">"stateDir"</span>: <span class="s">"~/.frogcode/openclaw"</span>,
   <span class="f">"gatewayToken"</span>: <span class="k">null</span>
 }</pre>
 

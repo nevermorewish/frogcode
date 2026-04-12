@@ -129,7 +129,7 @@ function readMessages(jsonlPath: string, limit = Number.POSITIVE_INFINITY): Chat
 function defaultStateDir(): string {
   return path.join(
     process.env.HOME || process.env.USERPROFILE || '',
-    '.anycode',
+    '.frogcode',
     'openclaw',
   );
 }

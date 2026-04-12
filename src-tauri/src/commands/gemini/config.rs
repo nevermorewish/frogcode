@@ -115,22 +115,22 @@ pub fn get_gemini_dir() -> Result<PathBuf, String> {
     Ok(native_dir)
 }
 
-/// Get the Any Code Gemini configuration path
-fn get_anycode_gemini_config_path() -> Result<PathBuf, String> {
+/// Get the Frog Code Gemini configuration path
+fn get_frogcode_gemini_config_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Failed to get home directory")?;
-    Ok(home.join(".anycode").join("gemini.json"))
+    Ok(home.join(".frogcode").join("gemini.json"))
 }
 
 /// Load Gemini configuration from file
 pub fn load_gemini_config() -> Result<GeminiConfig, String> {
-    let config_path = get_anycode_gemini_config_path()?;
+    let config_path = get_frogcode_gemini_config_path()?;
     // 使用通用配置加载工具
     crate::utils::config_utils::load_json_config(&config_path)
 }
 
 /// Save Gemini configuration to file
 pub fn save_gemini_config(config: &GeminiConfig) -> Result<(), String> {
-    let config_path = get_anycode_gemini_config_path()?;
+    let config_path = get_frogcode_gemini_config_path()?;
     // 使用通用配置保存工具
     crate::utils::config_utils::save_json_config(config, &config_path)
 }

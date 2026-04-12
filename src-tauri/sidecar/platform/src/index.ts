@@ -29,7 +29,7 @@
 import * as path from 'node:path';
 const _sdkLogPath = path.join(
   process.env.HOME || process.env.USERPROFILE || '',
-  '.anycode',
+  '.frogcode',
   'platform-sidecar.log',
 );
 function _sdkLog(prefix: string, args: any[]) {
@@ -75,7 +75,7 @@ const args = parseArgs(process.argv);
 // ============================================================================
 const _logFilePath = path.join(
   process.env.HOME || process.env.USERPROFILE || '',
-  '.anycode',
+  '.frogcode',
   'platform-sidecar.log',
 );
 function log(level: string, ...parts: any[]) {
@@ -141,7 +141,7 @@ function loadConfig(configPath: string): PlatformConfig | null {
         cfg.appSecret ||
         cfg.app_secret ||
         '',
-      projectPath: cfg.projectPath || cfg.project_path || '',
+      projectPath: cfg.projectPath || cfg.project_path || defaultConfig().projectPath,
       enabled: !!cfg.enabled,
       agentType,
     };
@@ -153,10 +153,11 @@ function loadConfig(configPath: string): PlatformConfig | null {
 
 /** Default config synthesized when no platform-config.json exists on disk. */
 function defaultConfig(): PlatformConfig {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
   return {
     appId: '',
     appSecret: '',
-    projectPath: '',
+    projectPath: home ? path.join(home, '.openclaw', 'workspace') : '',
     enabled: false,
     agentType: 'claudecode',
   };
@@ -168,7 +169,7 @@ function defaultConfig(): PlatformConfig {
 function loadAgentConfig(agentType: AgentType): any {
   const p = path.join(
     process.env.HOME || process.env.USERPROFILE || '',
-    '.anycode',
+    '.frogcode',
     'agents',
     `${agentType}.json`,
   );

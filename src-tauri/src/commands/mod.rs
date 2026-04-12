@@ -1,7 +1,9 @@
 pub mod acemcp;
 pub mod auth;
+pub mod default_skills;
 pub mod claude;
 pub mod home; // 首页工具检测
+pub mod openclaw_history; // OpenClaw 历史 session 直读
 pub mod platform_bridge; // Platform 桥接 (Feishu 等 IM 通过 Node sidecar，多 CLI adapter)
 pub mod clipboard;
 pub mod codex; // OpenAI Codex integration

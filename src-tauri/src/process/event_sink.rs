@@ -1,6 +1,6 @@
 //! Event sink abstraction used by the CLI runners.
 //!
-//! The desktop binary (`any-code`) wires these through Tauri's `AppHandle::emit`,
+//! The desktop binary (`frog-code`) wires these through Tauri's `AppHandle::emit`,
 //! while the web binary (`frogcode-web`) forwards them over a WebSocket envelope.
 //! Both paths share the same `cli_runner.rs` execution code — the sink is the
 //! only thing that changes between transports.

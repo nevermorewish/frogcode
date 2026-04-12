@@ -77,12 +77,23 @@ fn default_agent_type() -> String {
     "claudecode".to_string()
 }
 
+/// Default project path for the IM bridge: `~/.openclaw/workspace`.
+/// Claude Code sessions spawned via Feishu will `cd` into this directory.
+fn default_project_path() -> String {
+    dirs::home_dir()
+        .map(|h| {
+            let p = h.join(".openclaw").join("workspace");
+            p.to_string_lossy().to_string()
+        })
+        .unwrap_or_default()
+}
+
 impl Default for FeishuConfig {
     fn default() -> Self {
         Self {
             app_id: String::new(),
             app_secret: String::new(),
-            project_path: String::new(),
+            project_path: default_project_path(),
             enabled: false,
             agent_type: default_agent_type(),
         }
@@ -127,9 +138,9 @@ impl Default for PlatformBridgeState {
 //
 // Storage layout (v2 — per-agent Feishu credentials):
 //
-//   ~/.anycode/platform-config.json          ← only project_path / enabled / agent_type
-//   ~/.anycode/agents/claudecode.json        ← { ..., feishu: { app_id, app_secret } }
-//   ~/.anycode/agents/openclaw.json          ← { ..., feishu: { app_id, app_secret } }
+//   ~/.frogcode/platform-config.json          ← only project_path / enabled / agent_type
+//   ~/.frogcode/agents/claudecode.json        ← { ..., feishu: { app_id, app_secret } }
+//   ~/.frogcode/agents/openclaw.json          ← { ..., feishu: { app_id, app_secret } }
 //
 // The public FeishuConfig (frontend wire shape) still carries app_id/app_secret
 // so the UI contract is unchanged — we just merge/split at the file boundary.
@@ -141,7 +152,7 @@ impl Default for PlatformBridgeState {
 
 fn config_dir() -> Result<PathBuf, String> {
     dirs::home_dir()
-        .map(|h| h.join(".anycode"))
+        .map(|h| h.join(".frogcode"))
         .ok_or_else(|| "Cannot find home directory".to_string())
 }
 
@@ -304,10 +315,16 @@ fn read_config() -> Result<FeishuConfig, String> {
     let agent_cfg = read_agent_config_value(&root.agent_type)?;
     let (app_id, app_secret) = extract_feishu_creds(&agent_cfg);
 
+    let project_path = if root.project_path.is_empty() {
+        default_project_path()
+    } else {
+        root.project_path
+    };
+
     Ok(FeishuConfig {
         app_id,
         app_secret,
-        project_path: root.project_path,
+        project_path,
         enabled: root.enabled,
         agent_type: root.agent_type,
     })
@@ -347,7 +364,7 @@ fn get_or_extract_sidecar() -> Result<PathBuf, String> {
             .join("binaries")
             .join("frogcode-platform-sidecar.cjs"))
     } else {
-        // Release: extract to ~/.anycode/
+        // Release: extract to ~/.frogcode/
         // Always overwrite if the embedded bytes differ from what's on disk —
         // the embedded bundle is the authoritative version for this build.
         let dir = config_dir()?;
@@ -479,7 +496,7 @@ pub async fn platform_save_config(config: FeishuConfig) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Per-agent config files (~/.anycode/agents/{type}.json)
+// Per-agent config files (~/.frogcode/agents/{type}.json)
 // ---------------------------------------------------------------------------
 
 fn agent_config_path(agent_type: &str) -> Result<PathBuf, String> {
@@ -533,7 +550,7 @@ pub async fn platform_save_agent_config(
 // IM Channels — unified storage for all IM configs
 // ---------------------------------------------------------------------------
 //
-// Storage: ~/.anycode/im-channels.json
+// Storage: ~/.frogcode/im-channels.json
 // Format: { "channels": [ { appId, appSecret, platform, assignment, label } ] }
 //   assignment = "claudecode" | "openclaw" | "none"
 

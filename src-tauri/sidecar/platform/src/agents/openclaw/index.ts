@@ -8,7 +8,7 @@
  *   - WS events are normalized to AgentEvent for the card renderer
  *
  * Runtime layout (mirrors nexu):
- *   ~/.anycode/openclaw/
+ *   ~/.frogcode/openclaw/
  *     config/openclaw.json   ← gateway config (schema-validated writes)
  *     state/                 ← device identity, agents, extensions, skills
  *     tmp/                   ← TMPDIR passed to gateway
@@ -17,7 +17,7 @@
  * intentionally NOT touched — frogcode maintains its own device identity so
  * two installs can coexist on one machine.
  *
- * Config is read from ~/.anycode/agents/openclaw.json:
+ * Config is read from ~/.frogcode/agents/openclaw.json:
  *   { binPath, stateDir, gatewayPort, gatewayToken, controlUiOrigins }
  */
 
@@ -47,17 +47,17 @@ export interface OpenClawAgentConfig {
   binPath?: string | null;
   /**
    * OpenClaw state directory — device trust store, agents, canvas, cron.
-   * Default: ~/.anycode/openclaw/state
+   * Default: ~/.frogcode/openclaw/state
    */
   stateDir?: string;
   /**
    * Config file path.
-   * Default: ~/.anycode/openclaw/config/openclaw.json
+   * Default: ~/.frogcode/openclaw/config/openclaw.json
    */
   configPath?: string;
   /**
    * TMPDIR passed to the gateway process.
-   * Default: ~/.anycode/openclaw/tmp
+   * Default: ~/.frogcode/openclaw/tmp
    */
   tmpDir?: string;
   /**
@@ -77,7 +77,7 @@ export interface OpenClawAgentConfig {
 }
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
-const DEFAULT_RUNTIME_ROOT = path.join(HOME, '.anycode', 'openclaw');
+const DEFAULT_RUNTIME_ROOT = path.join(HOME, '.frogcode', 'openclaw');
 const DEFAULT_CONFIG_PATH = path.join(DEFAULT_RUNTIME_ROOT, 'config', 'openclaw.json');
 const DEFAULT_STATE_DIR = path.join(DEFAULT_RUNTIME_ROOT, 'state');
 const DEFAULT_TMP_DIR = path.join(DEFAULT_RUNTIME_ROOT, 'tmp');
@@ -225,7 +225,7 @@ function resolveOpenClawBin(binPath?: string | null): string {
 
   throw new Error(
     'openclaw binary not found. Install it first: npm install -g openclaw\n' +
-      'Or set binPath in ~/.anycode/agents/openclaw.json',
+      'Or set binPath in ~/.frogcode/agents/openclaw.json',
   );
 }
 

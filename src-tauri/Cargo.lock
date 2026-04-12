@@ -128,60 +128,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "any-code"
-version = "5.28.5"
-dependencies = [
- "anyhow",
- "arboard",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "chrono",
- "clap",
- "dirs 5.0.1",
- "env_logger",
- "futures",
- "futures-util",
- "glob",
- "image",
- "lazy_static",
- "log",
- "md5",
- "once_cell",
- "regex",
- "reqwest",
- "rusqlite",
- "rust-embed",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-http",
- "tauri-plugin-notification",
- "tauri-plugin-process",
- "tauri-plugin-shell",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tempfile",
- "tokio",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "tower",
- "tower-http",
- "urlencoding",
- "uuid",
- "walkdir",
- "windows 0.58.0",
- "zstd",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.98"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1593,6 +1539,60 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "frog-code"
+version = "5.28.5"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "dirs 5.0.1",
+ "env_logger",
+ "futures",
+ "futures-util",
+ "glob",
+ "image",
+ "lazy_static",
+ "log",
+ "md5",
+ "once_cell",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-http",
+ "tauri-plugin-notification",
+ "tauri-plugin-process",
+ "tauri-plugin-shell",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tempfile",
+ "tokio",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "tower",
+ "tower-http",
+ "urlencoding",
+ "uuid",
+ "walkdir",
+ "windows 0.58.0",
+ "zstd",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Any Code",
+  "productName": "Frog Code",
   "version": "5.28.5",
   "identifier": "claude.workbench.app",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Any Code",
+        "title": "Frog Code",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -61,11 +61,14 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "resources": [],
+    "resources": [
+      "bundled-skills/**/SKILL.md",
+      "bundled-openclaw-skills/**/*"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "Professional GUI Toolkit for AI CLI",
-    "longDescription": "Any Code is a professional desktop application and comprehensive toolkit for AI CLI. Provides an intuitive interface for AI-powered development workflows, project management, and advanced AI interactions. Supports Windows and macOS.",
+    "longDescription": "Frog Code is a professional desktop application and comprehensive toolkit for AI CLI. Provides an intuitive interface for AI-powered development workflows, project management, and advanced AI interactions. Supports Windows and macOS.",
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

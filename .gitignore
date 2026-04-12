@@ -61,6 +61,8 @@ nul
 
 # Tauri signing keys (sensitive!)
 .tauri-signing-key
+.tauri-build-key
+.tauri-build-key.pub
 *.key
 *.key.pub
 

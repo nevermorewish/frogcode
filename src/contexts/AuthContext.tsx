@@ -34,11 +34,12 @@ const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
 function extractOpenclawInfo(cliProviders: FrogclawCliProvider[]): {
   models: OpenClawModelInfo[];
   feishuAppId: string | null;
+  feishuAppSecret: string | null;
   configJson: string | null;
 } {
   const openclawProviders = cliProviders.filter(p => p.provider_type === 'openclaw');
   if (openclawProviders.length === 0) {
-    return { models: [], feishuAppId: null, configJson: null };
+    return { models: [], feishuAppId: null, feishuAppSecret: null, configJson: null };
   }
 
   // Pick the default one, or fall back to latest by updated_time
@@ -48,14 +49,14 @@ function extractOpenclawInfo(cliProviders: FrogclawCliProvider[]): {
   }
 
   if (!chosen.settings_config) {
-    return { models: [], feishuAppId: null, configJson: null };
+    return { models: [], feishuAppId: null, feishuAppSecret: null, configJson: null };
   }
 
   let config: Record<string, any>;
   try {
     config = JSON.parse(chosen.settings_config);
   } catch {
-    return { models: [], feishuAppId: null, configJson: null };
+    return { models: [], feishuAppId: null, feishuAppSecret: null, configJson: null };
   }
 
   // Extract models from config.models.providers
@@ -79,8 +80,9 @@ function extractOpenclawInfo(cliProviders: FrogclawCliProvider[]): {
   }
 
   const feishuAppId = config?.channels?.feishu?.appId || null;
+  const feishuAppSecret = config?.channels?.feishu?.appSecret || null;
 
-  return { models, feishuAppId, configJson: chosen.settings_config };
+  return { models, feishuAppId, feishuAppSecret, configJson: chosen.settings_config };
 }
 
 export const useAuth = () => {
@@ -204,6 +206,77 @@ function applyOpenclawInfo(
   if (ocInfo.configJson) {
     api.applyOpenclawConfig(ocInfo.configJson).catch(() => {});
   }
+
+  // Auto-provision Feishu credentials into IM channels + agent config
+  if (ocInfo.feishuAppId && ocInfo.feishuAppSecret) {
+    syncFeishuToImChannels(ocInfo.feishuAppId, ocInfo.feishuAppSecret).catch((e) =>
+      console.error('[Auth] Failed to sync Feishu creds to IM channels:', e),
+    );
+  }
+}
+
+/**
+ * Ensure the Feishu appId/appSecret from the openclaw server config are
+ * present in im-channels.json, assigned to "openclaw", and written into
+ * the per-agent config + platform root config so the sidecar picks them up.
+ */
+async function syncFeishuToImChannels(appId: string, appSecret: string) {
+  // 1. Read existing IM channels
+  const data = await api.getImChannels().catch(() => ({ channels: [] })) as any;
+  const channels: any[] = data?.channels || [];
+
+  // 2. Check if this appId already exists
+  const existing = channels.find((ch: any) => ch.appId === appId);
+  if (existing) {
+    // Already present — ensure it's assigned to openclaw and secret is up to date
+    if (existing.assignment !== 'openclaw' || existing.appSecret !== appSecret) {
+      // Unassign any other channel from openclaw first
+      for (const ch of channels) {
+        if (ch.assignment === 'openclaw' && ch !== existing) ch.assignment = 'none';
+      }
+      existing.assignment = 'openclaw';
+      existing.appSecret = appSecret;
+      await api.saveImChannels({ channels });
+    }
+  } else {
+    // Unassign any existing openclaw channel
+    for (const ch of channels) {
+      if (ch.assignment === 'openclaw') ch.assignment = 'none';
+    }
+    // Add new channel
+    channels.push({
+      id: `openclaw-${appId}`,
+      platform: 'feishu',
+      appId,
+      appSecret,
+      label: 'Frogclaw',
+      assignment: 'openclaw',
+    });
+    await api.saveImChannels({ channels });
+  }
+
+  // 3. Write creds into agent config + platform root config
+  const agentCfg = await api.platform.getAgentConfig('openclaw').catch(() => ({})) as any;
+  await api.platform.saveAgentConfig('openclaw', {
+    ...agentCfg,
+    feishu: { appId, appSecret },
+  });
+
+  const platformCfg = await api.platform.getConfig().catch(() => ({
+    appId: '', appSecret: '', projectPath: '', enabled: false,
+  })) as any;
+  await api.platform.saveConfig({
+    ...platformCfg,
+    appId,
+    appSecret,
+    agentType: 'openclaw',
+    enabled: true,
+  });
+
+  // 4. Restart sidecar to pick up new creds
+  try { await api.platform.stop(); } catch { /* ignore */ }
+  await api.platform.start();
+  try { await api.platform.connectFeishu(); } catch { /* ignore */ }
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {

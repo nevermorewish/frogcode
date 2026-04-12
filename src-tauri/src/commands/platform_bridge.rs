@@ -530,6 +530,38 @@ pub async fn platform_save_agent_config(
 }
 
 // ---------------------------------------------------------------------------
+// IM Channels — unified storage for all IM configs
+// ---------------------------------------------------------------------------
+//
+// Storage: ~/.anycode/im-channels.json
+// Format: { "channels": [ { appId, appSecret, platform, assignment, label } ] }
+//   assignment = "claudecode" | "openclaw" | "none"
+
+fn im_channels_path() -> Result<PathBuf, String> {
+    Ok(config_dir()?.join("im-channels.json"))
+}
+
+#[tauri::command]
+pub async fn get_im_channels() -> Result<serde_json::Value, String> {
+    let p = im_channels_path()?;
+    if !p.exists() {
+        return Ok(serde_json::json!({ "channels": [] }));
+    }
+    let raw = std::fs::read_to_string(&p).map_err(|e| format!("read im-channels: {}", e))?;
+    serde_json::from_str(&raw).map_err(|e| format!("parse im-channels: {}", e))
+}
+
+#[tauri::command]
+pub async fn save_im_channels(data: serde_json::Value) -> Result<(), String> {
+    let p = im_channels_path()?;
+    let dir = p.parent().ok_or_else(|| "no parent dir".to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {}", e))?;
+    let raw = serde_json::to_string_pretty(&data).map_err(|e| format!("serialize: {}", e))?;
+    std::fs::write(&p, raw).map_err(|e| format!("write im-channels: {}", e))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // OpenClaw session history proxies (sidecar HTTP → Tauri)
 // ---------------------------------------------------------------------------
 

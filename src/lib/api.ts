@@ -705,10 +705,32 @@ export interface FrogclawSystemProvider {
   token_group: string;
 }
 
+export interface FrogclawCliProvider {
+  id: number;
+  name: string;
+  provider_type: string;
+  base_url: string | null;
+  api_key: string | null;
+  settings_config: string | null;
+  is_default: boolean | null;
+  created_time: number | null;
+  updated_time: number | null;
+}
+
 export interface FrogclawLoginSession {
   user: FrogclawUserData;
   tokens: FrogclawToken[];
   system_providers: FrogclawSystemProvider[];
+  cli_providers: FrogclawCliProvider[];
+}
+
+export interface IMChannelConfig {
+  id: string;
+  platform: string;
+  appId: string;
+  appSecret: string;
+  label: string;
+  assignment: 'claudecode' | 'openclaw' | 'none';
 }
 
 /**
@@ -4383,6 +4405,20 @@ export const api = {
 
   async fetchFrogclawProviders(username: string, password: string): Promise<FrogclawLoginSession> {
     return await invoke<FrogclawLoginSession>("fetch_frogclaw_providers", { username, password });
+  },
+
+  async applyOpenclawConfig(configJson: string): Promise<void> {
+    return await invoke<void>("apply_openclaw_config", { configJson });
+  },
+
+  // ==================== IM Channels ====================
+
+  async getImChannels(): Promise<{ channels: IMChannelConfig[] }> {
+    return await invoke<{ channels: IMChannelConfig[] }>("get_im_channels");
+  },
+
+  async saveImChannels(data: { channels: IMChannelConfig[] }): Promise<void> {
+    return await invoke<void>("save_im_channels", { data });
   },
 
 };

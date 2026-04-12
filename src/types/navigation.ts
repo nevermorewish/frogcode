@@ -15,6 +15,7 @@ export type View =
   | "enhanced-hooks-manager"
   | "claude-extensions"
   | "openclaw-sessions"
+  | "im-channels"
   | "logs";
 
 export interface NavigationState {

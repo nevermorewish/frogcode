@@ -98,7 +98,7 @@
   "plugins": {
     "entries": {
       "feishu": {
-        "enabled": true
+        "enabled": false
       }
     }
   }

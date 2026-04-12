@@ -1,0 +1,399 @@
+/**
+ * IM Channels View — unified IM config management.
+ * All channels stored in ~/.anycode/im-channels.json.
+ * Claude Code and OpenClaw can each have one channel assigned.
+ */
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  Settings2,
+  Plus,
+  CheckCircle2,
+  Loader2,
+  Terminal,
+  ChevronDown,
+  CircleOff,
+  Trash2,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { api, type IMChannelConfig } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { usePlatformStatus } from '@/hooks/usePlatformStatus';
+import { FeishuSetupDialog } from './FeishuSetupDialog';
+import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
+
+// ---------------------------------------------------------------------------
+// Icons
+// ---------------------------------------------------------------------------
+
+const FeishuIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 48 48" className={className} xmlns="http://www.w3.org/2000/svg">
+    <path fill="#00D6B9" d="M32.5 12C38 12 42 16 42 21.5V36c0 .5-.6.8-1 .5-6.3-4.8-11.3-8-17-8-3.2 0-6 .7-9 2.2-.4.2-.8-.1-.8-.5V21.5C14.2 16 18.2 12 23.7 12h8.8z" />
+    <path fill="#3370FF" d="M6 22.8c0-.5.6-.8 1-.5 4.8 3.6 9.3 7 14.5 9.7 4.8 2.4 9.5 3 14.7 2.5.5 0 .8.4.6.8-2.5 4.3-7.2 7.2-12.5 7.2-3 0-5.8-.9-8.2-2.4C10.2 37 6 31.4 6 24.8v-2z" />
+  </svg>
+);
+
+const OpenClawIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <defs>
+      <linearGradient id="oc-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#ff4d4d" />
+        <stop offset="100%" stopColor="#991b1b" />
+      </linearGradient>
+    </defs>
+    <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="url(#oc-grad)" />
+    <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="url(#oc-grad)" />
+    <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="url(#oc-grad)" />
+    <path d="M45 15 Q35 5 30 8" stroke="#ff4d4d" strokeWidth="3" strokeLinecap="round" />
+    <path d="M75 15 Q85 5 90 8" stroke="#ff4d4d" strokeWidth="3" strokeLinecap="round" />
+    <circle cx="45" cy="35" r="6" fill="#050810" />
+    <circle cx="75" cy="35" r="6" fill="#050810" />
+    <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
+    <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
+  </svg>
+);
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type AgentAssignment = 'claudecode' | 'openclaw' | 'none';
+
+const AGENT_OPTIONS: { value: AgentAssignment; label: string; icon: React.ReactNode }[] = [
+  { value: 'none', label: '未分配', icon: <CircleOff className="h-3.5 w-3.5 text-muted-foreground" /> },
+  { value: 'claudecode', label: 'Claude Code', icon: <Terminal className="h-3.5 w-3.5" /> },
+  { value: 'openclaw', label: 'OpenClaw', icon: <OpenClawIcon className="h-3.5 w-3.5" /> },
+];
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export const IMChannelsView: React.FC = () => {
+  const { t } = useTranslation();
+  const bridge = usePlatformStatus();
+  const { feishuAppId: serverFeishuAppId } = useAuth();
+
+  const [channels, setChannels] = useState<IMChannelConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
+  const [agentDropdownId, setAgentDropdownId] = useState<string | null>(null);
+
+  const feishuConnected = bridge.status === 'running' && bridge.feishuStatus === 'running';
+
+  const loadChannels = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.getImChannels();
+      let list = data.channels || [];
+
+      // Merge server feishu appId if not already present
+      if (serverFeishuAppId && !list.some(ch => ch.appId === serverFeishuAppId)) {
+        list.push({
+          id: `server-${serverFeishuAppId}`,
+          platform: 'feishu',
+          appId: serverFeishuAppId,
+          appSecret: '',
+          label: '',
+          assignment: 'none',
+        });
+        // Auto-save the merged entry
+        await api.saveImChannels({ channels: list });
+      }
+
+      setChannels(list);
+    } catch {
+      setChannels([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [serverFeishuAppId]);
+
+  useEffect(() => { loadChannels(); }, [loadChannels]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!agentDropdownId) return;
+    const handler = () => setAgentDropdownId(null);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [agentDropdownId]);
+
+  const saveAndApply = async (updated: IMChannelConfig[]) => {
+    // Save to im-channels.json
+    await api.saveImChannels({ channels: updated });
+    setChannels(updated);
+
+    // Find active assigned channel and sync to platform config
+    const claudeChannel = updated.find(ch => ch.assignment === 'claudecode');
+    const openclawChannel = updated.find(ch => ch.assignment === 'openclaw');
+
+    // Determine which agent is primary (most recently assigned)
+    const activeAgent = claudeChannel ? 'claudecode' : openclawChannel ? 'openclaw' : '';
+    const activeChannel = claudeChannel || openclawChannel;
+
+    // Sync feishu creds to the assigned agent's config
+    if (claudeChannel) {
+      const agentCfg = await api.platform.getAgentConfig('claudecode').catch(() => ({})) as any;
+      await api.platform.saveAgentConfig('claudecode', {
+        ...agentCfg,
+        feishu: { appId: claudeChannel.appId, appSecret: claudeChannel.appSecret },
+      });
+    }
+    if (openclawChannel) {
+      const agentCfg = await api.platform.getAgentConfig('openclaw').catch(() => ({})) as any;
+      await api.platform.saveAgentConfig('openclaw', {
+        ...agentCfg,
+        feishu: { appId: openclawChannel.appId, appSecret: openclawChannel.appSecret },
+      });
+    }
+
+    // Update platform config
+    const cfg = await api.platform.getConfig().catch(() => ({
+      appId: '', appSecret: '', projectPath: '', enabled: false,
+    })) as any;
+
+    if (activeChannel) {
+      await api.platform.saveConfig({
+        ...cfg,
+        appId: activeChannel.appId,
+        appSecret: activeChannel.appSecret,
+        agentType: activeAgent,
+        enabled: true,
+      });
+      // Restart sidecar
+      try { await api.platform.stop(); } catch {}
+      await api.platform.start();
+      try { await api.platform.connectFeishu(); } catch {}
+    } else {
+      await api.platform.saveConfig({ ...cfg, enabled: false });
+      try { await api.platform.stop(); } catch {}
+    }
+  };
+
+  const handleAgentChange = async (channelId: string, newAssignment: AgentAssignment) => {
+    setAgentDropdownId(null);
+    const channel = channels.find(ch => ch.id === channelId);
+    if (!channel || channel.assignment === newAssignment) return;
+
+    setSwitching(channelId);
+    try {
+      // Each agent can only have one channel.
+      // Unassign any other channel that has the same agent (unless 'none').
+      const updated = channels.map(ch => {
+        if (ch.id === channelId) {
+          return { ...ch, assignment: newAssignment };
+        }
+        if (newAssignment !== 'none' && ch.assignment === newAssignment) {
+          return { ...ch, assignment: 'none' as AgentAssignment };
+        }
+        return ch;
+      });
+
+      await saveAndApply(updated);
+    } catch {
+      // ignore
+    } finally {
+      setSwitching(null);
+    }
+  };
+
+  const handleDelete = async (channelId: string) => {
+    const updated = channels.filter(ch => ch.id !== channelId);
+    try {
+      await saveAndApply(updated);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDialogConnected = async () => {
+    // After FeishuSetupDialog saves, reload and migrate new creds into im-channels
+    await migrateFromAgentConfigs();
+    await loadChannels();
+  };
+
+  // One-time migration: pull feishu creds from agent configs into im-channels.json
+  const migrateFromAgentConfigs = async () => {
+    const data = await api.getImChannels().catch(() => ({ channels: [] as IMChannelConfig[] }));
+    const list = data.channels || [];
+    const seen = new Set(list.map(ch => ch.appId));
+    let changed = false;
+
+    const platformCfg = await api.platform.getConfig().catch(() => ({ agentType: '' })) as any;
+    const activeAgent = platformCfg.agentType || '';
+
+    for (const agentType of ['claudecode', 'openclaw'] as const) {
+      const cfg = await api.platform.getAgentConfig(agentType).catch(() => ({})) as any;
+      const appId = cfg?.feishu?.appId;
+      if (appId && !seen.has(appId)) {
+        list.push({
+          id: `${agentType}-${appId}`,
+          platform: 'feishu',
+          appId,
+          appSecret: cfg.feishu.appSecret || '',
+          label: '',
+          assignment: activeAgent === agentType ? agentType : 'none',
+        });
+        seen.add(appId);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await api.saveImChannels({ channels: list });
+    }
+  };
+
+  // Migrate on first load
+  useEffect(() => { migrateFromAgentConfigs(); }, []);
+
+  const selectedOpt = (assignment: AgentAssignment) =>
+    AGENT_OPTIONS.find(a => a.value === assignment) || AGENT_OPTIONS[0];
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b px-6 py-4">
+        <div>
+          <h2 className="text-lg font-semibold">{t('sidebar.imChannels', 'IM 通道')}</h2>
+          <p className="text-sm text-muted-foreground">
+            {t('imChannels.subtitle', '管理消息通道配置，选择 AI 后端')}
+          </p>
+        </div>
+        <Button size="sm" onClick={() => setFeishuDialogOpen(true)}>
+          <Plus className="mr-1.5 h-4 w-4" />
+          {t('imChannels.addChannel', '添加通道')}
+        </Button>
+      </div>
+
+      {/* Channel List */}
+      <div className="flex-1 overflow-y-auto px-6 py-4">
+        {loading ? (
+          <div className="flex items-center justify-center py-12 text-muted-foreground">
+            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+          </div>
+        ) : channels.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="mb-3 rounded-full bg-muted p-4">
+              <Settings2 className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <p className="text-sm font-medium">{t('imChannels.noChannels', '暂无通道配置')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('imChannels.noChannelsHint', '点击"添加通道"配置飞书或其他 IM 通道')}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {channels.map((ch) => {
+              const isAssigned = ch.assignment !== 'none';
+              const isSwitching = switching === ch.id;
+              const statusColor = isAssigned && feishuConnected
+                ? 'bg-green-500'
+                : isAssigned && bridge.feishuStatus === 'starting'
+                  ? 'bg-amber-400'
+                  : isAssigned && bridge.feishuStatus === 'error'
+                    ? 'bg-red-500'
+                    : 'bg-muted-foreground/40';
+              const opt = selectedOpt(ch.assignment);
+
+              return (
+                <div
+                  key={ch.id}
+                  className={cn(
+                    'flex items-center gap-4 rounded-lg border bg-background px-4 py-3 transition-colors hover:bg-muted/30',
+                    isAssigned ? 'border-primary/30' : 'border-border',
+                  )}
+                >
+                  {/* Icon */}
+                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-white">
+                    <FeishuIcon className="h-5 w-5" />
+                  </div>
+
+                  {/* Info */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {t('home.imChannel.feishu', '飞书')}
+                      </span>
+                      <span className={cn('h-2 w-2 rounded-full', statusColor)} />
+                      {isAssigned && feishuConnected && (
+                        <span className="text-[10px] text-green-600">{t('imChannels.connected', '已连接')}</span>
+                      )}
+                      {!isAssigned && (
+                        <span className="text-[10px] text-muted-foreground">{t('imChannels.unassigned', '未分配')}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <code className="text-[11px] text-muted-foreground font-mono">{ch.appId}</code>
+                      {ch.label && (
+                        <span className="text-[10px] text-muted-foreground">· {ch.label}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Agent Selector */}
+                  <div className="relative" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      disabled={switching !== null}
+                      onClick={() => setAgentDropdownId(agentDropdownId === ch.id ? null : ch.id)}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50',
+                        isAssigned
+                          ? 'border-primary/40 bg-primary/5 hover:bg-primary/10'
+                          : 'border-input bg-background hover:bg-accent/50',
+                      )}
+                    >
+                      {isSwitching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : opt.icon}
+                      {isSwitching ? '...' : opt.label}
+                      <ChevronDown className={cn('h-3 w-3 text-muted-foreground transition-transform', agentDropdownId === ch.id && 'rotate-180')} />
+                    </button>
+                    {agentDropdownId === ch.id && (
+                      <div className="absolute right-0 z-50 mt-1 w-44 rounded-md border border-border bg-popover shadow-lg">
+                        {AGENT_OPTIONS.map((aopt) => (
+                          <button
+                            key={aopt.value}
+                            type="button"
+                            onClick={() => handleAgentChange(ch.id, aopt.value)}
+                            className={cn(
+                              'flex w-full items-center gap-2 px-3 py-2 text-[11px] hover:bg-accent/50 first:rounded-t-md last:rounded-b-md transition-colors',
+                              ch.assignment === aopt.value && 'bg-accent/30',
+                            )}
+                          >
+                            {aopt.icon}
+                            <span className="font-medium">{aopt.label}</span>
+                            {ch.assignment === aopt.value && (
+                              <CheckCircle2 className="ml-auto h-3 w-3 text-primary" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Delete */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDelete(ch.id)}
+                    className="flex-shrink-0 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <FeishuSetupDialog
+        open={feishuDialogOpen}
+        onOpenChange={setFeishuDialogOpen}
+        onConnected={handleDialogConnected}
+      />
+    </div>
+  );
+};

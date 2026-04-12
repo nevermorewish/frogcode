@@ -547,6 +547,36 @@ async fn rest_auth_providers(
     }
 }
 
+#[derive(Deserialize)]
+struct ApplyOpenclawConfigBody {
+    config_json: String,
+}
+
+async fn rest_apply_openclaw_config(
+    Json(body): Json<ApplyOpenclawConfigBody>,
+) -> Json<ApiResponse<()>> {
+    match commands::auth::apply_openclaw_config(body.config_json).await {
+        Ok(v) => Json(ApiResponse::ok(v)),
+        Err(e) => Json(ApiResponse::err(e)),
+    }
+}
+
+async fn rest_get_im_channels() -> Json<ApiResponse<serde_json::Value>> {
+    match commands::platform_bridge::get_im_channels().await {
+        Ok(v) => Json(ApiResponse::ok(v)),
+        Err(e) => Json(ApiResponse::err(e)),
+    }
+}
+
+async fn rest_save_im_channels(
+    Json(body): Json<serde_json::Value>,
+) -> Json<ApiResponse<()>> {
+    match commands::platform_bridge::save_im_channels(body).await {
+        Ok(()) => Json(ApiResponse::ok(())),
+        Err(e) => Json(ApiResponse::err(e)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket handler — /ws/exec
 // ---------------------------------------------------------------------------
@@ -840,9 +870,12 @@ pub fn build_router(state: WebAppState) -> Router {
             "/api/platform/agent-config/{agent_type}",
             get(rest_platform_get_agent_config).post(rest_platform_save_agent_config),
         )
+        // IM channels unified storage
+        .route("/api/im-channels", get(rest_get_im_channels).post(rest_save_im_channels))
         // Frogclaw auth (pure HTTP passthrough — no state needed)
         .route("/api/auth/login", post(rest_auth_login))
         .route("/api/auth/providers", post(rest_auth_providers))
+        .route("/api/auth/apply-openclaw-config", post(rest_apply_openclaw_config))
         // Platform sidecar proxies — forward to the external Node sidecar
         // running at `openclaw_base`. Start/Stop become no-ops because the
         // desktop process owns the sidecar lifecycle.

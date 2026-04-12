@@ -129,9 +129,6 @@ function applyFrogcodeFixups(
   //    runs as a Windows scheduled task).
   rewritten.gateway = rewritten.gateway || {};
   rewritten.gateway.port = port;
-  // Also clamp bind to loopback — LAN bind is fine for the standalone
-  // install but not desirable for a desktop app.
-  rewritten.gateway.bind = 'loopback';
 
   return rewritten;
 }
@@ -146,13 +143,7 @@ export function initialConfig(
   extensionsDir: string,
   port: number,
 ): Record<string, any> {
-  const legacy = loadLegacyConfig();
-  if (legacy) {
-    log('info', 'bootstrapping from legacy ~/.openclaw/openclaw.json');
-    return applyFrogcodeFixups(legacy, stateDir, extensionsDir, port);
-  }
   log('info', 'bootstrapping from bundled openclaw-template.json');
-  // Deep clone so we don't mutate the imported module cache.
   const clone = JSON.parse(JSON.stringify(openclawTemplate));
   return applyFrogcodeFixups(clone, stateDir, extensionsDir, port);
 }

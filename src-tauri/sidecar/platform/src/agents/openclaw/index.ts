@@ -549,10 +549,6 @@ export class OpenClawAgent implements Agent {
         log('info', `rewriting gateway.port ${config.gateway.port} → ${port}`);
         config.gateway.port = port;
       }
-      if (config.gateway.bind !== 'loopback') {
-        log('info', `rewriting gateway.bind ${config.gateway.bind} → loopback`);
-        config.gateway.bind = 'loopback';
-      }
       this.configWriter.write(config);
     } catch (err: any) {
       throw new Error(
@@ -592,10 +588,20 @@ export class OpenClawAgent implements Agent {
     // clicks Start again from the OpenClaw Sessions view.
     this.processManager.start();
 
-    // Start WS client
+    // Start WS client — resolve gateway token from agent config or openclaw.json
+    let resolvedGatewayToken = this.config.gatewayToken || undefined;
+    if (!resolvedGatewayToken) {
+      try {
+        const ocCfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const cfgToken = ocCfg?.gateway?.auth?.token;
+        if (typeof cfgToken === 'string' && cfgToken) {
+          resolvedGatewayToken = cfgToken;
+        }
+      } catch { /* ignore */ }
+    }
     const wsConfig: WsClientConfig = {
       baseUrl: `http://127.0.0.1:${port}`,
-      gatewayToken: this.config.gatewayToken || undefined,
+      gatewayToken: resolvedGatewayToken,
       stateDir,
     };
     this.wsClient = new OpenClawWsClient(wsConfig);

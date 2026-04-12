@@ -258,10 +258,10 @@ export class OpenClawWsClient extends EventEmitter {
     const signedAtMs = Date.now();
     const role = 'operator';
     const scopes = ['operator.admin'];
-    // The gateway validates client.id against a whitelist of known clients.
-    // Use 'nexu' — this WS client was ported from nexu's codebase and the
-    // gateway recognizes it. 'frogcode-platform' isn't in the allowlist.
-    const clientId = 'nexu';
+    // The gateway validates client.id against a whitelist of known clients:
+    // webchat-ui, openclaw-control-ui, webchat, cli, gateway-client,
+    // openclaw-macos, openclaw-ios, openclaw-android, node-host, test, etc.
+    const clientId = 'gateway-client';
     const clientMode = 'backend';
     const platform = process.platform;
 
@@ -274,18 +274,31 @@ export class OpenClawWsClient extends EventEmitter {
     const resolvedDeviceToken = explicitToken ? undefined : (storedToken ?? undefined);
     const authToken = explicitToken ?? resolvedDeviceToken;
 
-    const payloadStr = buildDeviceAuthPayloadV3({
-      deviceId: this.deviceIdentity.deviceId,
-      clientId,
-      clientMode,
-      role,
-      scopes,
-      signedAtMs,
-      token: authToken ?? '',
-      nonce,
-      platform,
-    });
-    const signature = signDevicePayload(this.deviceIdentity.privateKeyPem, payloadStr);
+    // When we have an explicit gateway token, use token-only auth and skip
+    // device signature — the gateway validates the signature first and rejects
+    // the connection before it even looks at the token.
+    let deviceBlock: Record<string, unknown> | undefined;
+    if (!explicitToken) {
+      const payloadStr = buildDeviceAuthPayloadV3({
+        deviceId: this.deviceIdentity.deviceId,
+        clientId,
+        clientMode,
+        role,
+        scopes,
+        signedAtMs,
+        token: authToken ?? '',
+        nonce,
+        platform,
+      });
+      const signature = signDevicePayload(this.deviceIdentity.privateKeyPem, payloadStr);
+      deviceBlock = {
+        id: this.deviceIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(this.deviceIdentity.publicKeyPem),
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+    }
 
     const frame: RequestFrame = {
       type: 'req',
@@ -295,13 +308,7 @@ export class OpenClawWsClient extends EventEmitter {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: { id: clientId, version: '1.0.0', platform, mode: clientMode },
-        device: {
-          id: this.deviceIdentity.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(this.deviceIdentity.publicKeyPem),
-          signature,
-          signedAt: signedAtMs,
-          nonce,
-        },
+        ...(deviceBlock ? { device: deviceBlock } : {}),
         auth:
           authToken || resolvedDeviceToken
             ? { token: authToken, deviceToken: resolvedDeviceToken }

@@ -1,5 +1,11 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import { api, type FrogclawUserData, type FrogclawToken, type FrogclawSystemProvider } from '@/lib/api';
+import { api, type FrogclawUserData, type FrogclawToken, type FrogclawSystemProvider, type FrogclawCliProvider } from '@/lib/api';
+
+export interface OpenClawModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+}
 
 interface AuthContextType {
   user: FrogclawUserData | null;
@@ -7,6 +13,8 @@ interface AuthContextType {
   tokens: FrogclawToken[];
   systemProviders: FrogclawSystemProvider[];
   selectedTokenId: number | null;
+  openclawModels: OpenClawModelInfo[];
+  feishuAppId: string | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   selectToken: (tokenId: number) => Promise<void>;
@@ -19,7 +27,61 @@ const AUTH_CRED_KEY = 'frogclaw_auth_cred';
 const AUTH_USER_KEY = 'frogclaw_auth_user';
 const AUTH_TOKENS_KEY = 'frogclaw_tokens';
 const AUTH_SELECTED_TOKEN_KEY = 'frogclaw_selected_token';
+const AUTH_OPENCLAW_MODELS_KEY = 'frogclaw_openclaw_models';
+const AUTH_FEISHU_APPID_KEY = 'frogclaw_feishu_appid';
 const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
+
+function extractOpenclawInfo(cliProviders: FrogclawCliProvider[]): {
+  models: OpenClawModelInfo[];
+  feishuAppId: string | null;
+  configJson: string | null;
+} {
+  const openclawProviders = cliProviders.filter(p => p.provider_type === 'openclaw');
+  if (openclawProviders.length === 0) {
+    return { models: [], feishuAppId: null, configJson: null };
+  }
+
+  // Pick the default one, or fall back to latest by updated_time
+  let chosen = openclawProviders.find(p => p.is_default);
+  if (!chosen) {
+    chosen = openclawProviders.sort((a, b) => (b.updated_time ?? 0) - (a.updated_time ?? 0))[0];
+  }
+
+  if (!chosen.settings_config) {
+    return { models: [], feishuAppId: null, configJson: null };
+  }
+
+  let config: Record<string, any>;
+  try {
+    config = JSON.parse(chosen.settings_config);
+  } catch {
+    return { models: [], feishuAppId: null, configJson: null };
+  }
+
+  // Extract models from config.models.providers
+  const models: OpenClawModelInfo[] = [];
+  const providers = config?.models?.providers;
+  if (providers && typeof providers === 'object') {
+    for (const [providerName, providerData] of Object.entries(providers)) {
+      const pd = providerData as any;
+      if (Array.isArray(pd?.models)) {
+        for (const m of pd.models) {
+          if (m?.id) {
+            models.push({
+              id: m.id,
+              name: m.name || m.id,
+              provider: providerName,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const feishuAppId = config?.channels?.feishu?.appId || null;
+
+  return { models, feishuAppId, configJson: chosen.settings_config };
+}
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -123,6 +185,27 @@ async function setupProviders(
   }
 }
 
+/** Process openclaw info from a login session and persist to state + disk */
+function applyOpenclawInfo(
+  session: { cli_providers?: FrogclawCliProvider[] },
+  setOpenclawModels: (m: OpenClawModelInfo[]) => void,
+  setFeishuAppId: (id: string | null) => void,
+) {
+  const ocInfo = extractOpenclawInfo(session.cli_providers || []);
+  setOpenclawModels(ocInfo.models);
+  setFeishuAppId(ocInfo.feishuAppId);
+  localStorage.setItem(AUTH_OPENCLAW_MODELS_KEY, JSON.stringify(ocInfo.models));
+  if (ocInfo.feishuAppId) {
+    localStorage.setItem(AUTH_FEISHU_APPID_KEY, ocInfo.feishuAppId);
+  } else {
+    localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
+  }
+  // Write config to disk (Rust side also logs to system log)
+  if (ocInfo.configJson) {
+    api.applyOpenclawConfig(ocInfo.configJson).catch(() => {});
+  }
+}
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<FrogclawUserData | null>(() => {
     const saved = localStorage.getItem(AUTH_USER_KEY);
@@ -142,6 +225,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const [systemProviders, setSystemProviders] = useState<FrogclawSystemProvider[]>([]);
 
+  const [openclawModels, setOpenclawModels] = useState<OpenClawModelInfo[]>(() => {
+    const saved = localStorage.getItem(AUTH_OPENCLAW_MODELS_KEY);
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
+  });
+
+  const [feishuAppId, setFeishuAppId] = useState<string | null>(() => {
+    return localStorage.getItem(AUTH_FEISHU_APPID_KEY) || null;
+  });
+
   const [selectedTokenId, setSelectedTokenId] = useState<number | null>(() => {
     const saved = localStorage.getItem(AUTH_SELECTED_TOKEN_KEY);
     if (saved) {
@@ -150,7 +245,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return null;
   });
 
-  // Background re-verify saved credentials & refresh tokens
+  // On every startup: if credentials exist, re-verify and fetch openclaw config
   useEffect(() => {
     const cred = localStorage.getItem(AUTH_CRED_KEY);
     if (!cred) return;
@@ -164,6 +259,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           setSystemProviders(session.system_providers);
           localStorage.setItem(AUTH_USER_KEY, JSON.stringify(session.user));
           localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+
+          // Always fetch and apply openclaw config on startup
+          applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
         })
         .catch(() => {
           setUser(null);
@@ -172,6 +270,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           localStorage.removeItem(AUTH_USER_KEY);
           localStorage.removeItem(AUTH_TOKENS_KEY);
           localStorage.removeItem(AUTH_SELECTED_TOKEN_KEY);
+          localStorage.removeItem(AUTH_OPENCLAW_MODELS_KEY);
+          localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
         });
     } catch {
       localStorage.removeItem(AUTH_CRED_KEY);
@@ -180,7 +280,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    // Fetch user, tokens, and system providers in one call
     const session = await api.fetchFrogclawProviders(username, password);
     setUser(session.user);
     setTokens(session.tokens);
@@ -189,6 +288,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     localStorage.setItem(AUTH_CRED_KEY, btoa(JSON.stringify({ u: username, p: password })));
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(session.user));
     localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+
+    // Fetch and apply openclaw config
+    applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
 
     // Auto-setup providers with first token
     if (session.tokens.length > 0) {
@@ -220,8 +322,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setTokens(session.tokens);
       setSystemProviders(session.system_providers);
       localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
-    } catch (err) {
-      console.error('[Auth] Failed to refresh providers:', err);
+
+      // Also refresh openclaw config
+      applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
+    } catch {
+      // silently ignore
     }
   }, []);
 
@@ -230,10 +335,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setTokens([]);
     setSystemProviders([]);
     setSelectedTokenId(null);
+    setOpenclawModels([]);
+    setFeishuAppId(null);
     localStorage.removeItem(AUTH_CRED_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
     localStorage.removeItem(AUTH_TOKENS_KEY);
     localStorage.removeItem(AUTH_SELECTED_TOKEN_KEY);
+    localStorage.removeItem(AUTH_OPENCLAW_MODELS_KEY);
+    localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
   }, []);
 
   return (
@@ -243,6 +352,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       tokens,
       systemProviders,
       selectedTokenId,
+      openclawModels,
+      feishuAppId,
       login,
       logout,
       selectToken,

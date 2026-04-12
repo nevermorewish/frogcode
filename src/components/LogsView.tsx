@@ -5,7 +5,8 @@
  *   - Platform sidecar log: ~/.anycode/platform-sidecar.log (via platform_read_log)
  *   - Tauri app log: AppData/any-code/logs/ (via read_app_log)
  *
- * Features: auto-refresh, scroll-to-bottom, open in file explorer, search filter.
+ * Features: auto-refresh, scroll-to-bottom, open in file explorer, search filter,
+ *           category filter chips (openclaw, feishu, sidecar, auth).
  */
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
@@ -36,46 +37,43 @@ interface LogSource {
   fetchLines: () => Promise<{ path: string; exists: boolean; totalLines: number; lines: string[] }>;
 }
 
+interface CategoryFilter {
+  id: string;
+  label: string;
+  pattern: RegExp;
+  color: string;
+}
+
+const CATEGORY_FILTERS: CategoryFilter[] = [
+  { id: 'openclaw', label: 'OpenClaw', pattern: /\[openclaw-|openclaw/i, color: 'text-purple-400 border-purple-400/40 bg-purple-400/10' },
+  { id: 'feishu', label: '飞书', pattern: /feishu|飞书/i, color: 'text-cyan-400 border-cyan-400/40 bg-cyan-400/10' },
+  { id: 'sidecar', label: 'Sidecar', pattern: /\[rust |sidecar|platform/i, color: 'text-blue-400 border-blue-400/40 bg-blue-400/10' },
+  { id: 'auth', label: 'Auth', pattern: /\[auth |login|token|frogclaw/i, color: 'text-green-400 border-green-400/40 bg-green-400/10' },
+  { id: 'error', label: 'Error', pattern: /\berror\b|\[err\]/i, color: 'text-red-400 border-red-400/40 bg-red-400/10' },
+];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** Classify a log line for syntax colouring. */
 function lineClass(line: string): string {
-  // Errors (red) — sidecar, openclaw, rust, SDK
   if (/\berror\b/i.test(line)) return 'text-red-400';
   if (/\[err\]/i.test(line)) return 'text-red-400';
-
-  // Warnings (yellow)
   if (/\bwarn\b/i.test(line)) return 'text-yellow-400';
   if (/DeprecationWarning/i.test(line)) return 'text-yellow-400/70';
-
-  // Event flow (cyan/bright) — feishu message lifecycle
   if (/RECV |DISPATCH|DONE /i.test(line)) return 'text-cyan-300 font-medium';
   if (/\[event\]/i.test(line)) return 'text-cyan-400';
-
-  // Drop/filter (orange)
   if (/DROP:/i.test(line)) return 'text-orange-400';
-
-  // Rust lifecycle (blue)
   if (/\[rust /i.test(line)) return 'text-blue-400';
-
-  // SDK noise (dim)
+  if (/\[auth /i.test(line)) return 'text-green-400';
   if (/\[sdk /i.test(line)) return 'text-[#667788]';
-
-  // OpenClaw WS client (purple)
   if (/\[openclaw-ws /i.test(line)) return 'text-purple-400';
-
-  // OpenClaw process stdout/stderr (dim green / dim red)
   if (/\[openclaw-proc.*\[out\]/i.test(line) || /\[out\]/i.test(line)) return 'text-green-400/60';
   if (/\[openclaw-proc.*\[err\]/i.test(line)) return 'text-red-400/70';
-
-  // Info (green)
+  if (/feishu/i.test(line)) return 'text-cyan-400';
   if (/\binfo\b/i.test(line)) return 'text-green-400/80';
-
-  // Feishu connected / ready (bright green)
   if (/connected|READY|ready/i.test(line)) return 'text-green-400';
-
   return 'text-[#8899aa]';
 }
 
@@ -94,6 +92,7 @@ export const LogsView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [filter, setFilter] = useState('');
+  const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
 
@@ -132,7 +131,6 @@ export const LogsView: React.FC = () => {
     }
   }, [activeTab]);
 
-  // Initial + auto-refresh
   useEffect(() => {
     fetchLog();
     if (!autoRefresh) return;
@@ -140,14 +138,12 @@ export const LogsView: React.FC = () => {
     return () => clearInterval(interval);
   }, [fetchLog, autoRefresh]);
 
-  // Auto-scroll to bottom when new lines arrive
   useEffect(() => {
     if (autoScrollRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [lines]);
 
-  // Detect manual scroll-up → pause auto-scroll
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
@@ -163,9 +159,6 @@ export const LogsView: React.FC = () => {
 
   const handleOpenInExplorer = useCallback(async () => {
     if (!logPath) return;
-    // Open the parent directory in the system file explorer.
-    // @tauri-apps/plugin-shell `open` handles both URLs and local paths
-    // on all platforms (Windows: explorer.exe, macOS: open, Linux: xdg-open).
     const dir = logPath.replace(/[/\\][^/\\]+$/, '');
     try {
       await shellOpen(dir);
@@ -175,16 +168,38 @@ export const LogsView: React.FC = () => {
   }, [logPath]);
 
   const handleClear = useCallback(async () => {
-    // Just clear the UI — the actual log file will be rotated next time
-    // the sidecar starts (old → .prev.log, fresh file created).
     setLines([]);
     setTotalLines(0);
   }, []);
 
+  const toggleCategory = useCallback((id: string) => {
+    setActiveCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   // ─── Filtered lines ──────────────────────────────────────────────────
-  const filtered = filter
-    ? lines.filter((l) => l.toLowerCase().includes(filter.toLowerCase()))
-    : lines;
+  let filtered = lines;
+
+  // Apply category filters (OR logic — show lines matching ANY active category)
+  if (activeCategories.size > 0) {
+    const patterns = CATEGORY_FILTERS
+      .filter(c => activeCategories.has(c.id))
+      .map(c => c.pattern);
+    filtered = filtered.filter(line => patterns.some(p => p.test(line)));
+  }
+
+  // Apply text search filter
+  if (filter) {
+    const lowerFilter = filter.toLowerCase();
+    filtered = filtered.filter(l => l.toLowerCase().includes(lowerFilter));
+  }
 
   // ─── Render ──────────────────────────────────────────────────────────
   return (
@@ -204,7 +219,6 @@ export const LogsView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Auto-refresh toggle */}
           <Button
             variant="outline"
             size="sm"
@@ -240,7 +254,7 @@ export const LogsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Tab bar + filter */}
+      {/* Tab bar + category filters + search */}
       <div className="flex items-center gap-3 border-b border-border px-6 py-2">
         {/* Tabs */}
         <div className="flex items-center gap-1">
@@ -263,6 +277,36 @@ export const LogsView: React.FC = () => {
 
         <div className="h-4 w-px bg-border" />
 
+        {/* Category filter chips */}
+        <div className="flex items-center gap-1">
+          {CATEGORY_FILTERS.map((cat) => (
+            <button
+              key={cat.id}
+              type="button"
+              onClick={() => toggleCategory(cat.id)}
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                activeCategories.has(cat.id)
+                  ? cat.color
+                  : 'border-border text-muted-foreground hover:bg-muted/50',
+              )}
+            >
+              {cat.label}
+            </button>
+          ))}
+          {activeCategories.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveCategories(new Set())}
+              className="rounded-full px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            >
+              {t('logs.clearFilter', '清除')}
+            </button>
+          )}
+        </div>
+
+        <div className="h-4 w-px bg-border" />
+
         {/* Search */}
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -280,7 +324,7 @@ export const LogsView: React.FC = () => {
             <code className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{logPath}</code>
           )}
           <span>
-            {filter ? `${filtered.length} / ` : ''}
+            {(filter || activeCategories.size > 0) ? `${filtered.length} / ` : ''}
             {totalLines} {t('logs.lines', '行')}
           </span>
         </div>
@@ -314,7 +358,7 @@ export const LogsView: React.FC = () => {
 
         {logExists && filtered.length === 0 && !loading && (
           <div className="py-10 text-center text-[12px] text-muted-foreground">
-            {filter
+            {(filter || activeCategories.size > 0)
               ? t('logs.noMatch', '没有匹配的日志行')
               : t('logs.empty', '日志文件为空')}
           </div>

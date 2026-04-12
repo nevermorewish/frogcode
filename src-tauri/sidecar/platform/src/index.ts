@@ -26,23 +26,25 @@
 // alongside our own `log()` output. stdout is only used by the explicit
 // `process.stdout.write(FROGCODE_PLATFORM_READY ...)` call below.
 // ============================================================================
+import * as path from 'node:path';
+const _sdkLogPath = path.join(
+  process.env.HOME || process.env.USERPROFILE || '',
+  '.anycode',
+  'platform-sidecar.log',
+);
+function _sdkLog(prefix: string, args: any[]) {
+  const line = `[sdk ${prefix}] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`;
+  try { process.stderr.write(line); } catch {}
+  try { require('fs').appendFileSync(_sdkLogPath, line); } catch {}
+}
 const _origConsoleLog = console.log;
-console.log = (...args: any[]) => {
-  try { process.stderr.write(`[sdk log] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
-};
-console.info = (...args: any[]) => {
-  try { process.stderr.write(`[sdk info] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
-};
-console.warn = (...args: any[]) => {
-  try { process.stderr.write(`[sdk warn] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
-};
-console.debug = (...args: any[]) => {
-  try { process.stderr.write(`[sdk debug] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
-};
+console.log = (...args: any[]) => _sdkLog('log', args);
+console.info = (...args: any[]) => _sdkLog('info', args);
+console.warn = (...args: any[]) => _sdkLog('warn', args);
+console.debug = (...args: any[]) => _sdkLog('debug', args);
 
 import * as http from 'node:http';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { EventEmitter } from 'node:events';
 import * as lark from '@larksuiteoapi/node-sdk';
 
@@ -67,11 +69,20 @@ function parseArgs(argv: string[]) {
 const args = parseArgs(process.argv);
 
 // ============================================================================
-// Logger
+// Logger — dual-write: stderr (captured by Rust) + direct file append
+// On Windows, stderr-to-file can buffer indefinitely after the initial writes,
+// so we also append directly to the log file for reliability.
 // ============================================================================
+const _logFilePath = path.join(
+  process.env.HOME || process.env.USERPROFILE || '',
+  '.anycode',
+  'platform-sidecar.log',
+);
 function log(level: string, ...parts: any[]) {
   const msg = parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ');
-  process.stderr.write(`[sidecar ${level}] ${msg}\n`);
+  const line = `[sidecar ${level}] ${msg}\n`;
+  try { process.stderr.write(line); } catch {}
+  try { fs.appendFileSync(_logFilePath, line); } catch {}
 }
 
 // ============================================================================
@@ -329,6 +340,7 @@ function extractTextFromPost(content: Record<string, unknown>): string {
 // ============================================================================
 function createEventDispatcher(): lark.EventDispatcher {
   const dispatcher = new lark.EventDispatcher({});
+  log('info', 'Registering feishu event handler: im.message.receive_v1');
 
   dispatcher.register({
     'im.message.receive_v1': async (data: any) => {
@@ -477,6 +489,28 @@ function createEventDispatcher(): lark.EventDispatcher {
           return;
         }
 
+        // Pre-flight check: if the agent is openclaw, verify gateway is running
+        // before attempting to dispatch — gives the user a clear message instead
+        // of a cryptic RPC error after a long startup wait.
+        if (agentManager.agentName === 'openclaw') {
+          try {
+            const ocStatus = getOpenClawAgent().status();
+            if (!ocStatus.started || !ocStatus.processAlive) {
+              log('warn', `OpenClaw gateway not running (started=${ocStatus.started} alive=${ocStatus.processAlive}), notifying user`);
+              await sendText(chatId, '\u26A0\uFE0F OpenClaw 网关未启动，请先在应用中启动 OpenClaw 后再发送消息。');
+              return;
+            }
+            if (!ocStatus.wsConnected) {
+              log('warn', 'OpenClaw gateway WS not connected, notifying user');
+              await sendText(chatId, '\u26A0\uFE0F OpenClaw 网关 WebSocket 未连接，请检查日志。');
+              return;
+            }
+          } catch {
+            // getOpenClawAgent() may throw if not initialized — that's fine,
+            // let the normal dispatch path handle it.
+          }
+        }
+
         log(
           'event',
           `DISPATCH → agent=${agentManager.agentName} cwd=${currentConfig?.projectPath || '(empty)'} prompt="${text.slice(0, 40)}" files=${files.length}`,
@@ -587,15 +621,13 @@ async function connectFeishu(): Promise<{ ok: boolean; error?: string }> {
     wsClient = new lark.WSClient({
       appId: currentConfig.appId,
       appSecret: currentConfig.appSecret,
-      // Use warn level to reduce noise — SDK's info logs are verbose and
-      // were the original cause of the EPIPE crash (console.info → stdout).
-      loggerLevel: lark.LoggerLevel.warn,
+      loggerLevel: lark.LoggerLevel.info,
     });
     await wsClient.start({ eventDispatcher: dispatcher });
 
     feishuStatus = 'running';
     emitStatus();
-    log('info', 'Feishu WSClient connected');
+    log('info', `Feishu WSClient connected (appId=${currentConfig.appId})`);
     return { ok: true };
   } catch (err: any) {
     feishuStatus = 'error';

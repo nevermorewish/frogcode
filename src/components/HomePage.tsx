@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { usePlatformStatus } from '@/hooks/usePlatformStatus';
-import { FeishuSetupDialog } from '@/components/im/FeishuSetupDialog';
 import {
   CheckCircle2,
   XCircle,
@@ -13,9 +11,8 @@ import {
   LogIn,
   Key,
   LogOut,
-  MessageSquare,
-  Send,
   Check,
+  MessageSquare,
   ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -24,6 +21,8 @@ import { Toast, ToastContainer } from '@/components/ui/toast';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { useNavigation } from '@/contexts/NavigationContext';
+import { usePlatformStatus } from '@/hooks/usePlatformStatus';
 
 interface ToolStatus {
   id: string;
@@ -297,7 +296,7 @@ const FrogclawCard: React.FC<{
   onToast: (message: string, type: 'success' | 'error' | 'info') => void;
 }> = ({ onToast }) => {
   const { t } = useTranslation();
-  const { user, isAuthenticated, login, logout, tokens, selectedTokenId, selectToken } = useAuth();
+  const { user, isAuthenticated, login, logout, tokens, selectedTokenId, selectToken, openclawModels, feishuAppId } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -437,6 +436,43 @@ const FrogclawCard: React.FC<{
               </div>
             )}
           </div>
+
+          {/* OpenClaw Config from Server */}
+          {(openclawModels.length > 0 || feishuAppId) && (
+            <div className="space-y-2 border-t border-border pt-3">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                OpenClaw {t('home.frogclaw.serverConfig', '服务器配置')}
+              </div>
+              {openclawModels.length > 0 && (
+                <div>
+                  <div className="text-[11px] text-muted-foreground mb-1">
+                    {t('home.frogclaw.models', '模型')} ({openclawModels.length})
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {openclawModels.map((m) => (
+                      <span
+                        key={`${m.provider}/${m.id}`}
+                        className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-mono text-foreground"
+                        title={`${m.provider}/${m.id}`}
+                      >
+                        {m.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {feishuAppId && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">
+                    {t('home.frogclaw.feishuAppId', '飞书 App ID')}:
+                  </span>
+                  <code className="text-[11px] font-mono text-foreground bg-muted px-1.5 py-0.5 rounded">
+                    {feishuAppId}
+                  </code>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </FeatureCard>
@@ -444,19 +480,13 @@ const FrogclawCard: React.FC<{
 };
 
 // =====================================================================
-// IM Channel Card (UI only)
+// IM Channel Card — quick overview, click to go to IM Channels page
 // =====================================================================
 
 const FeishuIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg viewBox="0 0 48 48" className={className} xmlns="http://www.w3.org/2000/svg">
-    <path
-      fill="#00D6B9"
-      d="M32.5 12C38 12 42 16 42 21.5V36c0 .5-.6.8-1 .5-6.3-4.8-11.3-8-17-8-3.2 0-6 .7-9 2.2-.4.2-.8-.1-.8-.5V21.5C14.2 16 18.2 12 23.7 12h8.8z"
-    />
-    <path
-      fill="#3370FF"
-      d="M6 22.8c0-.5.6-.8 1-.5 4.8 3.6 9.3 7 14.5 9.7 4.8 2.4 9.5 3 14.7 2.5.5 0 .8.4.6.8-2.5 4.3-7.2 7.2-12.5 7.2-3 0-5.8-.9-8.2-2.4C10.2 37 6 31.4 6 24.8v-2z"
-    />
+    <path fill="#00D6B9" d="M32.5 12C38 12 42 16 42 21.5V36c0 .5-.6.8-1 .5-6.3-4.8-11.3-8-17-8-3.2 0-6 .7-9 2.2-.4.2-.8-.1-.8-.5V21.5C14.2 16 18.2 12 23.7 12h8.8z" />
+    <path fill="#3370FF" d="M6 22.8c0-.5.6-.8 1-.5 4.8 3.6 9.3 7 14.5 9.7 4.8 2.4 9.5 3 14.7 2.5.5 0 .8.4.6.8-2.5 4.3-7.2 7.2-12.5 7.2-3 0-5.8-.9-8.2-2.4C10.2 37 6 31.4 6 24.8v-2z" />
   </svg>
 );
 
@@ -467,22 +497,17 @@ const WechatIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-interface ChannelCardProps {
+interface ChannelQuickCardProps {
   icon: React.ReactNode;
   name: string;
   description: string;
-  status: 'connected' | 'disconnected';
   statusColor: string;
-  onConfigure: () => void;
+  statusText: string;
+  onClick: () => void;
 }
 
-const ChannelCard: React.FC<ChannelCardProps> = ({
-  icon,
-  name,
-  description,
-  status,
-  statusColor,
-  onConfigure,
+const ChannelQuickCard: React.FC<ChannelQuickCardProps> = ({
+  icon, name, description, statusColor, statusText, onClick,
 }) => {
   const { t } = useTranslation();
   return (
@@ -494,27 +519,15 @@ const ChannelCard: React.FC<ChannelCardProps> = ({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">{name}</div>
           <div className="flex items-center gap-1">
-            <span
-              className={cn('h-1.5 w-1.5 rounded-full', statusColor)}
-              aria-hidden
-            />
-            <span className="text-[10px] text-muted-foreground">
-              {status === 'connected'
-                ? t('home.imChannel.connected', '已连接')
-                : t('home.imChannel.notConfigured', '未配置')}
-            </span>
+            <span className={cn('h-1.5 w-1.5 rounded-full', statusColor)} aria-hidden />
+            <span className="text-[10px] text-muted-foreground">{statusText}</span>
           </div>
         </div>
       </div>
       <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground line-clamp-2">
         {description}
       </p>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={onConfigure}
-        className="h-7 w-full text-xs"
-      >
+      <Button size="sm" variant="outline" onClick={onClick} className="h-7 w-full text-xs">
         <ExternalLink className="mr-1 h-3 w-3" />
         {t('home.imChannel.configure', '配置')}
       </Button>
@@ -522,14 +535,11 @@ const ChannelCard: React.FC<ChannelCardProps> = ({
   );
 };
 
-const IMChannelCard: React.FC<{
-  onToast: (message: string, type: 'success' | 'error' | 'info') => void;
-}> = ({ onToast }) => {
+const IMChannelCard: React.FC = () => {
   const { t } = useTranslation();
-  const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
+  const { navigateTo } = useNavigation();
   const bridge = usePlatformStatus();
 
-  // Derive Feishu card props from bridge status
   const feishuConnected = bridge.status === 'running' && bridge.feishuStatus === 'running';
   const feishuColor = feishuConnected
     ? 'bg-green-500'
@@ -538,6 +548,11 @@ const IMChannelCard: React.FC<{
       : bridge.status === 'running' && bridge.feishuStatus === 'error'
         ? 'bg-red-500'
         : 'bg-muted-foreground/40';
+  const feishuStatusText = feishuConnected
+    ? t('home.imChannel.connected', '已连接')
+    : t('home.imChannel.notConfigured', '未配置');
+
+  const goToChannels = () => navigateTo('im-channels');
 
   return (
     <FeatureCard
@@ -546,52 +561,23 @@ const IMChannelCard: React.FC<{
       subtitle={t('home.imChannel.subtitle', '配置消息通知渠道')}
     >
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <ChannelCard
+        <ChannelQuickCard
           icon={<FeishuIcon className="h-5 w-5" />}
           name={t('home.imChannel.feishu', '飞书')}
-          description={t(
-            'home.imChannel.feishuDesc',
-            '通过飞书机器人接收通知，支持消息卡片和交互按钮'
-          )}
-          status={feishuConnected ? 'connected' : 'disconnected'}
+          description={t('home.imChannel.feishuDesc', '通过飞书机器人接收通知，支持消息卡片和交互按钮')}
           statusColor={feishuColor}
-          onConfigure={() => setFeishuDialogOpen(true)}
+          statusText={feishuStatusText}
+          onClick={goToChannels}
         />
-        <ChannelCard
+        <ChannelQuickCard
           icon={<WechatIcon className="h-5 w-5" />}
           name={t('home.imChannel.wechat', '微信')}
-          description={t(
-            'home.imChannel.wechatDesc',
-            '通过企业微信或 Server 酱推送消息到个人微信'
-          )}
-          status="disconnected"
+          description={t('home.imChannel.wechatDesc', '通过企业微信或 Server 酱推送消息到个人微信')}
           statusColor="bg-muted-foreground/40"
-          onConfigure={() =>
-            onToast(
-              `${t('home.imChannel.wechat', '微信')} ${t('home.imChannel.comingSoon', '配置功能即将推出')}`,
-              'info'
-            )
-          }
+          statusText={t('home.imChannel.comingSoon', '即将推出')}
+          onClick={goToChannels}
         />
       </div>
-
-      <div className="mt-3 flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2">
-        <Send className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-        <span className="text-[11px] text-muted-foreground">
-          {t(
-            'home.imChannel.hint',
-            '配置完成后，任务完成、错误通知等事件将自动推送到所选通道'
-          )}
-        </span>
-      </div>
-
-      <FeishuSetupDialog
-        open={feishuDialogOpen}
-        onOpenChange={setFeishuDialogOpen}
-        onConnected={() =>
-          onToast(t('home.imChannel.feishu.connected', '飞书机器人已连接'), 'success')
-        }
-      />
     </FeatureCard>
   );
 };
@@ -627,7 +613,7 @@ export const HomePage: React.FC = () => {
         <div className="flex flex-col gap-5">
           <DevEnvironmentCard onToast={showToast} />
           <FrogclawCard onToast={showToast} />
-          <IMChannelCard onToast={showToast} />
+          <IMChannelCard />
         </div>
       </div>
 

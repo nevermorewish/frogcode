@@ -367,7 +367,7 @@ export const OpenClawSessionsView: React.FC = () => {
         <div>
           <h1 className="text-xl font-semibold text-foreground">OpenClaw Sessions</h1>
           <p className="mt-0.5 text-[12px] text-muted-foreground">
-            Conversation history from <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">~/.frogcode/openclaw/agents/*</code>
+            OpenClaw 网关的对话历史记录，用户通过飞书发送消息时自动创建会话
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -561,6 +561,21 @@ export const OpenClawSessionsView: React.FC = () => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Usage guide (shown when no sessions yet) */}
+      {!loading && sessions.length === 0 && historySessions.length === 0 && (
+        <div className="mx-6 mt-3 rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3">
+          <p className="mb-1.5 text-xs font-medium text-blue-700 dark:text-blue-400">
+            使用说明
+          </p>
+          <ul className="space-y-1 text-[11px] leading-relaxed text-blue-700/80 dark:text-blue-400/80">
+            <li>1. 此页面展示通过 OpenClaw 网关处理的所有飞书对话历史</li>
+            <li>2. 确保 OpenClaw 网关已启动（上方状态栏显示绿色"Gateway running"），可通过 Start/Stop 按钮控制</li>
+            <li>3. 在「IM 通道」页面将飞书机器人的后端设置为 OpenClaw，用户在飞书中发消息后会话将自动出现在左侧列表</li>
+            <li>4. 点击左侧会话可查看完整对话内容，点击「导入历史」可加载磁盘上的离线会话记录</li>
+          </ul>
         </div>
       )}
 

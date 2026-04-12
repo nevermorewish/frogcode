@@ -268,6 +268,19 @@ export const IMChannelsView: React.FC = () => {
         </Button>
       </div>
 
+      {/* Usage guide */}
+      <div className="mx-6 mt-4 rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3">
+        <p className="mb-1.5 text-xs font-medium text-blue-700 dark:text-blue-400">
+          {t('imChannels.guideTitle', '使用说明')}
+        </p>
+        <ul className="space-y-1 text-[11px] leading-relaxed text-blue-700/80 dark:text-blue-400/80">
+          <li>{t('imChannels.guide1', '1. 点击「添加通道」填写飞书机器人的 App ID 和 App Secret，支持添加多个飞书机器人')}</li>
+          <li>{t('imChannels.guide2', '2. 通过右侧下拉框为每个通道选择 AI 后端：Claude Code（使用官方 Claude Max 订阅）或 OpenClaw（通过 Frogclaw 服务器）')}</li>
+          <li>{t('imChannels.guide3', '3. 每种后端同一时间只能绑定一个通道，切换时会自动解绑原通道')}</li>
+          <li>{t('imChannels.guide4', '4. 分配后端后飞书机器人将自动连接，在飞书中发送消息即可开始 AI 对话')}</li>
+        </ul>
+      </div>
+
       {/* Channel List */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (

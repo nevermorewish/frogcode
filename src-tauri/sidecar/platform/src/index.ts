@@ -12,6 +12,34 @@
  *
  * Rust parent manages lifecycle only (spawn/kill, config r/w, SSE relay).
  */
+
+// ============================================================================
+// CRITICAL: redirect console.{log,info,warn,debug} to stderr BEFORE any import.
+//
+// Reason: stdout is piped to the Rust parent process and only used for the
+// initial "FROGCODE_PLATFORM_READY port=N" handshake. After the Rust side
+// reads that line it drops the pipe reader. Any subsequent stdout write
+// (e.g. from the Feishu SDK's internal `console.info` logger) causes an
+// EPIPE error that crashes the sidecar.
+//
+// By redirecting console to stderr, all SDK logging lands in the log file
+// alongside our own `log()` output. stdout is only used by the explicit
+// `process.stdout.write(FROGCODE_PLATFORM_READY ...)` call below.
+// ============================================================================
+const _origConsoleLog = console.log;
+console.log = (...args: any[]) => {
+  try { process.stderr.write(`[sdk log] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
+};
+console.info = (...args: any[]) => {
+  try { process.stderr.write(`[sdk info] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
+};
+console.warn = (...args: any[]) => {
+  try { process.stderr.write(`[sdk warn] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
+};
+console.debug = (...args: any[]) => {
+  try { process.stderr.write(`[sdk debug] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`); } catch {}
+};
+
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -81,7 +109,10 @@ function loadConfig(configPath: string): PlatformConfig | null {
     if (!fs.existsSync(configPath)) return null;
     const raw = fs.readFileSync(configPath, 'utf8');
     const cfg = JSON.parse(raw);
-    const agentType: AgentType = (cfg.agentType as AgentType) || 'openclaw';
+    // agentType only controls which backend handles the IM (Feishu) bridge.
+    // The OpenClaw Sessions view + /openclaw/* endpoints go through a
+    // module-level singleton OpenClawAgent so they're available regardless.
+    const agentType: AgentType = (cfg.agentType as AgentType) || 'claudecode';
     // Feishu credentials live under each agent's per-agent config file as of
     // v5.29 — pull them from agents/<type>.json's `feishu` sub-object. Fall
     // back to root appId/appSecret (legacy layout) if the agent file has none,
@@ -101,8 +132,6 @@ function loadConfig(configPath: string): PlatformConfig | null {
         '',
       projectPath: cfg.projectPath || cfg.project_path || '',
       enabled: !!cfg.enabled,
-      // Default to 'openclaw' (matches Rust default_agent_type) so a fresh
-      // install lands on the OpenClaw adapter.
       agentType,
     };
   } catch (e: any) {
@@ -118,7 +147,7 @@ function defaultConfig(): PlatformConfig {
     appSecret: '',
     projectPath: '',
     enabled: false,
-    agentType: 'openclaw',
+    agentType: 'claudecode',
   };
 }
 
@@ -145,12 +174,31 @@ function loadAgentConfig(agentType: AgentType): any {
 // ============================================================================
 // Agent initialization
 // ============================================================================
+
+/**
+ * Module-level OpenClawAgent singleton. Exists regardless of the active
+ * IM-bridge agentType so the OpenClaw Sessions view, /openclaw/start,
+ * /openclaw/stop, /openclaw/restart, /openclaw/status endpoints are
+ * always reachable — users can run openclaw and claudecode side by side.
+ *
+ * Lazy-initialized on first access so we don't touch disk at import time.
+ */
+let openclawAgent: OpenClawAgent | null = null;
+function getOpenClawAgent(): OpenClawAgent {
+  if (!openclawAgent) {
+    openclawAgent = new OpenClawAgent(loadAgentConfig('openclaw'));
+  }
+  return openclawAgent;
+}
+
 function createAgent(type: AgentType): Agent {
   switch (type) {
     case 'claudecode':
       return new ClaudeCodeAgent(loadAgentConfig('claudecode'));
     case 'openclaw':
-      return new OpenClawAgent(loadAgentConfig('openclaw'));
+      // Reuse the singleton so the IM bridge and /openclaw/* endpoints
+      // operate on the same underlying gateway process.
+      return getOpenClawAgent();
     default: {
       const _exhaustive: never = type;
       throw new Error(`unknown agent type: ${_exhaustive}`);
@@ -287,24 +335,55 @@ function createEventDispatcher(): lark.EventDispatcher {
       try {
         const message = data.message;
         const sender = data.sender;
-        const msgType = message.message_type;
-
-        if (!['text', 'post', 'image', 'file'].includes(msgType)) return;
-
+        const msgType = message?.message_type;
+        const chatId = message?.chat_id;
+        const chatType = message?.chat_type;
+        const messageId = message?.message_id;
         const userId = sender?.sender_id?.open_id;
-        if (!userId) return;
 
-        const chatId = message.chat_id;
-        const chatType = message.chat_type;
-        const messageId = message.message_id;
+        // ── EARLY DIAGNOSTIC LOG ────────────────────────────────────────
+        // Log BEFORE any filter runs so users can tell the difference
+        // between "event not received" (log silent) and "event filtered
+        // out" (log shows event + reason).
+        log(
+          'event',
+          `RECV im.message.receive_v1 chat=${chatType}/${chatId?.slice(0, 12)} user=${userId?.slice(0, 12)} msg=${messageId?.slice(0, 12)} type=${msgType}`,
+        );
 
-        // In group chats, only respond when @mentioned
+        if (!['text', 'post', 'image', 'file'].includes(msgType)) {
+          log('event', `DROP: unsupported msgType=${msgType}`);
+          return;
+        }
+
+        if (!userId) {
+          log('event', `DROP: missing sender.sender_id.open_id`);
+          return;
+        }
+
+        // In group chats, only respond when @mentioned.
+        // botOpenId may be null if botInfo.get() failed at connect time —
+        // in that case we fall back to "any mention counts" so users can
+        // still interact with the bot. A message with zero mentions in a
+        // group is silently dropped (by design).
         if (chatType === 'group') {
           const mentions = message.mentions;
-          const mentioned = mentions?.some(
+          if (!Array.isArray(mentions) || mentions.length === 0) {
+            log(
+              'event',
+              `DROP: group chat, no @mentions (bot requires @mention in groups)`,
+            );
+            return;
+          }
+          const mentioned = mentions.some(
             (m: any) => !botOpenId || m.id?.open_id === botOpenId,
           );
-          if (!mentioned) return;
+          if (!mentioned) {
+            log(
+              'event',
+              `DROP: group chat, bot not @mentioned (botOpenId=${botOpenId ?? 'unknown'})`,
+            );
+            return;
+          }
         }
 
         let text = '';
@@ -393,9 +472,15 @@ function createEventDispatcher(): lark.EventDispatcher {
 
         // ─── Dispatch to agent ────────────────────────────────────────────
         if (!agentManager) {
+          log('error', 'DROP: agentManager not initialized');
           await sendText(chatId, '\u26A0\uFE0F Agent not initialized. Check sidecar logs.');
           return;
         }
+
+        log(
+          'event',
+          `DISPATCH → agent=${agentManager.agentName} cwd=${currentConfig?.projectPath || '(empty)'} prompt="${text.slice(0, 40)}" files=${files.length}`,
+        );
 
         // Begin card rendering for this turn (creates thinking card + typing reaction)
         cardRenderer.begin(chatId, messageId);
@@ -410,6 +495,7 @@ function createEventDispatcher(): lark.EventDispatcher {
             prompt: text,
             files,
           });
+          log('event', `DONE chat=${chatId?.slice(0, 12)} msg=${messageId?.slice(0, 12)}`);
         } catch (err: any) {
           log('error', 'agentManager.handle:', err.message);
           await cardRenderer.processEvent(chatId, {
@@ -450,6 +536,16 @@ async function connectFeishu(): Promise<{ ok: boolean; error?: string }> {
     return { ok: false, error: feishuError };
   }
 
+  // Idempotency guard: if already connected, skip — prevents the dual-
+  // WSClient bug where both the sidecar auto-start and the Rust parent's
+  // platform_connect_feishu both call this function, creating two WS
+  // connections to the same bot. Feishu's backend only routes events to
+  // ONE connection, so the second steals events from the first.
+  if (feishuStatus === 'running' && wsClient) {
+    log('info', 'connectFeishu: already connected, skipping');
+    return { ok: true };
+  }
+
   feishuStatus = 'starting';
   feishuError = null;
   emitStatus();
@@ -467,19 +563,33 @@ async function connectFeishu(): Promise<{ ok: boolean; error?: string }> {
     });
     cardRenderer.setLarkClient(larkClient);
 
+    // Fetch bot's own open_id for group-chat @mention matching.
+    // The SDK exposes this via different paths depending on version.
     try {
-      const info = await (larkClient as any).bot.v3.botInfo.get();
-      botOpenId = info?.bot?.open_id || null;
+      let info: any;
+      // v1.58+ path: larkClient.bot.v3.botInfo.get()
+      if ((larkClient as any).bot?.v3?.botInfo?.get) {
+        info = await (larkClient as any).bot.v3.botInfo.get();
+      } else {
+        // Fallback: raw HTTP call — always works regardless of SDK shape.
+        info = await larkClient.request({
+          method: 'GET',
+          url: 'https://open.feishu.cn/open-apis/bot/v3/info',
+        });
+      }
+      botOpenId = info?.data?.bot?.open_id || info?.bot?.open_id || null;
       log('info', 'Bot open_id:', botOpenId);
     } catch (e: any) {
-      log('warn', 'Could not get bot info:', e.message);
+      log('warn', 'Could not get bot info (non-fatal, group @mention may not filter):', e.message);
     }
 
     const dispatcher = createEventDispatcher();
     wsClient = new lark.WSClient({
       appId: currentConfig.appId,
       appSecret: currentConfig.appSecret,
-      loggerLevel: lark.LoggerLevel.info,
+      // Use warn level to reduce noise — SDK's info logs are verbose and
+      // were the original cause of the EPIPE crash (console.info → stdout).
+      loggerLevel: lark.LoggerLevel.warn,
     });
     await wsClient.start({ eventDispatcher: dispatcher });
 
@@ -626,37 +736,28 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ─── OpenClaw controls ──────────────────────────────────────────────
+    // These endpoints go through the module-level OpenClawAgent singleton
+    // so they work regardless of which backend is currently wired to the
+    // Feishu IM bridge — openclaw and claudecode can coexist.
     if (m === 'POST' && p === '/openclaw/start') {
-      const agent = agentManager?.getAgent();
-      if (!agent || agent.name !== 'openclaw') {
-        return sendJson(res, 400, { ok: false, error: 'agent is not openclaw' });
-      }
       try {
-        await (agent as OpenClawAgent).startGateway();
+        await getOpenClawAgent().startGateway();
         return sendJson(res, 200, { ok: true });
       } catch (e: any) {
         return sendJson(res, 500, { ok: false, error: e.message });
       }
     }
     if (m === 'POST' && p === '/openclaw/stop') {
-      const agent = agentManager?.getAgent();
-      if (!agent || agent.name !== 'openclaw') {
-        return sendJson(res, 400, { ok: false, error: 'agent is not openclaw' });
-      }
       try {
-        await (agent as OpenClawAgent).stopGateway();
+        await getOpenClawAgent().stopGateway();
         return sendJson(res, 200, { ok: true });
       } catch (e: any) {
         return sendJson(res, 500, { ok: false, error: e.message });
       }
     }
     if (m === 'POST' && p === '/openclaw/restart') {
-      const agent = agentManager?.getAgent();
-      if (!agent || agent.name !== 'openclaw') {
-        return sendJson(res, 400, { ok: false, error: 'agent is not openclaw' });
-      }
       try {
-        await (agent as OpenClawAgent).restart();
+        await getOpenClawAgent().restart();
         return sendJson(res, 200, { ok: true });
       } catch (e: any) {
         return sendJson(res, 500, { ok: false, error: e.message });
@@ -668,21 +769,12 @@ const server = http.createServer(async (req, res) => {
     // GET /openclaw/sessions             → list all sessions (summaries)
     // GET /openclaw/sessions/:id         → full detail incl. messages
     if (m === 'GET' && p === '/openclaw/status') {
-      // Check if agent is openclaw and get its status
-      const isOc = currentConfig?.agentType === 'openclaw';
-      if (!isOc) {
-        return sendJson(res, 200, {
-          ok: true,
-          active: false,
-          agentType: currentConfig?.agentType ?? 'claudecode',
-        });
-      }
+      // Always active — the singleton OpenClawAgent is always present, even
+      // when the IM bridge is using claudecode. Status reflects the gateway
+      // process itself, not the IM wiring.
       let ocStatus: OpenClawStatus | null = null;
       try {
-        const agent = agentManager?.getAgent();
-        if (agent && agent.name === 'openclaw') {
-          ocStatus = (agent as OpenClawAgent).status();
-        }
+        ocStatus = getOpenClawAgent().status();
       } catch {}
       return sendJson(res, 200, {
         ok: true,
@@ -748,9 +840,14 @@ server.listen(args.port, '127.0.0.1', () => {
   process.stdout.write(`FROGCODE_PLATFORM_READY port=${actualPort}\n`);
   log('info', `listening on 127.0.0.1:${actualPort}`);
 
-  if (currentConfig && currentConfig.enabled) {
-    connectFeishu().catch((e: any) => log('warn', 'auto-connect failed:', e.message));
-  }
+  // NOTE: we deliberately do NOT auto-connect to Feishu here, even if
+  // `currentConfig.enabled` is true. The Rust parent (main.rs) is the
+  // single source of truth for calling platform_connect_feishu after
+  // the sidecar signals READY. If we auto-connected here too, both
+  // paths would create competing WSClient instances against the same
+  // bot — Feishu's backend only delivers events to ONE connection, so
+  // one of them would silently steal messages from the other.
+  // See connectFeishu() idempotency guard for a second line of defense.
 });
 
 server.on('error', (e: any) => {

@@ -34,18 +34,6 @@ export interface ProcessConfig {
 }
 
 const MAX_LOG_LINES = 500;
-
-const MAX_RESTARTS = 10;
-const RESTART_WINDOW_MS = 120_000;
-const BASE_DELAY_MS = 3_000;
-/**
- * If the gateway process exits within this many milliseconds of spawn, we
- * treat it as a "fast failure" — usually port-in-use or an immediate config
- * error. After MAX_FAST_FAILURES consecutive fast failures we stop the
- * auto-restart loop so the user isn't stuck watching endless retries.
- */
-const FAST_FAILURE_THRESHOLD_MS = 10_000;
-const MAX_FAST_FAILURES = 3;
 const NEXU_EVENT_MARKER = 'NEXU_EVENT ';
 
 function log(level: string, ...parts: any[]) {
@@ -61,17 +49,10 @@ export interface OpenClawRuntimeEvent {
 export class OpenClawProcessManager extends EventEmitter {
   private child: ChildProcess | null = null;
   private readonly config: ProcessConfig;
-  private autoRestart = false;
-  private restartCount = 0;
-  private windowStart = 0;
   private logStream: fs.WriteStream | null = null;
   private logTail: string[] = [];
   private readonly logPath: string;
-  /** Timestamp of the last spawn, used to detect fast-failures. */
-  private spawnStartedAt = 0;
-  /** Consecutive fast-failure (exit <FAST_FAILURE_THRESHOLD_MS) count. */
-  private fastFailureCount = 0;
-  /** Terminal error message if auto-restart gave up. Exposed via getFatalError(). */
+  /** Terminal error from the last spawn attempt. Cleared by start(). */
   private fatalError: string | null = null;
 
   constructor(config: ProcessConfig) {
@@ -91,8 +72,9 @@ export class OpenClawProcessManager extends EventEmitter {
   }
 
   /**
-   * If auto-restart gave up (e.g. port is permanently held by another
-   * process), this returns a human-readable reason. Cleared by start().
+   * Human-readable error from the last spawn attempt (e.g. "port in use"),
+   * or null if the process is running or hasn't been started. Cleared at
+   * the top of start(), populated from stderr on exit.
    */
   getFatalError(): string | null {
     return this.fatalError;
@@ -134,15 +116,16 @@ export class OpenClawProcessManager extends EventEmitter {
     }
   }
 
-  enableAutoRestart(): void {
-    this.autoRestart = true;
-  }
-
+  /**
+   * Spawn the openclaw gateway. ONE-SHOT — no automatic restart on failure.
+   * If the process dies, it stays dead. The user can hit Start again from
+   * the OpenClaw Sessions view (which goes through ensureGateway and
+   * constructs a fresh ProcessManager).
+   */
   start(): void {
     if (this.child && !this.child.killed) return;
 
-    // Clear any previous fatal state so the caller can retry after fixing
-    // the root cause (e.g. stopping the conflicting process).
+    // Clear any previous fatal state — fresh attempt.
     this.fatalError = null;
 
     this.openLogStream();
@@ -197,8 +180,7 @@ export class OpenClawProcessManager extends EventEmitter {
     }
 
     this.child = child;
-    this.spawnStartedAt = Date.now();
-    this.windowStart = this.windowStart || Date.now();
+    const spawnStartedAt = Date.now();
 
     // Record PID for orphan reaping next run
     if (child.pid) {
@@ -220,51 +202,30 @@ export class OpenClawProcessManager extends EventEmitter {
     }
 
     child.on('close', (code) => {
-      const uptime = Date.now() - this.spawnStartedAt;
+      const uptime = Date.now() - spawnStartedAt;
       this.writeLog('info', `exited code=${code} uptime=${uptime}ms`);
       this.child = null;
       clearPidFile(this.config.stateDir);
+
+      // Populate fatalError from stderr so the UI banner can surface the
+      // actual cause (port conflict, missing bin, etc). No auto-restart —
+      // one shot, stays dead.
+      const hint = this.extractFailureHint();
+      this.fatalError =
+        hint ?? `openclaw gateway exited with code ${code} after ${uptime}ms`;
+      this.writeLog('error', `stopped: ${this.fatalError}`);
       this.emit('exit', code);
-
-      // A healthy gateway runs for minutes/hours. If it died within
-      // FAST_FAILURE_THRESHOLD_MS it's almost certainly a startup error
-      // (port conflict, bad config, missing binary) and retrying without
-      // user intervention will just loop forever.
-      if (uptime < FAST_FAILURE_THRESHOLD_MS) {
-        this.fastFailureCount++;
-        this.writeLog(
-          'warn',
-          `fast failure ${this.fastFailureCount}/${MAX_FAST_FAILURES} (exited in ${uptime}ms)`,
-        );
-        if (this.fastFailureCount >= MAX_FAST_FAILURES) {
-          this.autoRestart = false;
-          // Surface a hint pulled from recent stderr if we can find one.
-          const hint = this.extractFailureHint();
-          this.fatalError =
-            hint ||
-            `openclaw gateway exited ${MAX_FAST_FAILURES} times in a row within ${FAST_FAILURE_THRESHOLD_MS}ms. Check logs; likely a port conflict or config error.`;
-          this.writeLog('error', `giving up: ${this.fatalError}`);
-          this.emit('max-restarts', this.fatalError);
-          return;
-        }
-      } else {
-        // Long-running success reset
-        this.fastFailureCount = 0;
-      }
-
-      this.maybeAutoRestart();
     });
 
     child.on('error', (err) => {
       this.writeLog('error', `spawn error: ${err.message}`);
       this.child = null;
+      this.fatalError = err.message;
       this.emit('error', err);
-      this.maybeAutoRestart();
     });
   }
 
   async stop(): Promise<void> {
-    this.autoRestart = false;
     if (!this.child || this.child.killed) {
       this.logStream?.end();
       this.logStream = null;
@@ -346,29 +307,6 @@ export class OpenClawProcessManager extends EventEmitter {
       }
     }
     return null;
-  }
-
-  private maybeAutoRestart(): void {
-    if (!this.autoRestart) return;
-
-    // Reset counter if outside window
-    if (Date.now() - this.windowStart > RESTART_WINDOW_MS) {
-      this.restartCount = 0;
-      this.windowStart = Date.now();
-    }
-    this.restartCount++;
-
-    if (this.restartCount > MAX_RESTARTS) {
-      log('error', `exceeded max restarts (${MAX_RESTARTS} in ${RESTART_WINDOW_MS}ms)`);
-      this.emit('max-restarts');
-      return;
-    }
-
-    const delay = BASE_DELAY_MS * Math.min(this.restartCount, 5);
-    log('info', `auto-restart in ${delay}ms (attempt ${this.restartCount}/${MAX_RESTARTS})`);
-    setTimeout(() => {
-      if (this.autoRestart && !this.child) this.start();
-    }, delay);
   }
 
   private parseEventLine(line: string): void {

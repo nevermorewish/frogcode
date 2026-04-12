@@ -27,6 +27,7 @@ import { EnhancedHooksManager } from '@/components/EnhancedHooksManager';
 import { ClaudeExtensionsManager } from '@/components/ClaudeExtensionsManager';
 import { HomePage } from '@/components/HomePage';
 import { OpenClawSessionsView } from '@/components/OpenClawSessionsView';
+import { LogsView } from '@/components/LogsView';
 import { ProjectCardSkeleton, SessionListItemSkeleton } from '@/components/ui/skeleton';
 import { useNavigation } from '@/contexts/NavigationContext';
 import { useProject } from '@/contexts/ProjectContext';
@@ -473,6 +474,9 @@ export const ViewRouter: React.FC = () => {
 
       case "openclaw-sessions":
         return <OpenClawSessionsView />;
+
+      case "logs":
+        return <LogsView />;
 
       case "project-settings":
         if (viewParams.project) {

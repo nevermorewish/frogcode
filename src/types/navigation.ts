@@ -14,7 +14,8 @@ export type View =
   | "project-settings"
   | "enhanced-hooks-manager"
   | "claude-extensions"
-  | "openclaw-sessions";
+  | "openclaw-sessions"
+  | "logs";
 
 export interface NavigationState {
   currentView: View;

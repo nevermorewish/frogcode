@@ -391,16 +391,29 @@ export const OpenClawSessionsView: React.FC = () => {
       </div>
 
       {/* Status banner */}
-      {status && (
+      {status && (() => {
+        // Derived state: gateway is actually mid-startup (process alive but
+        // WS not connected yet), vs merely idle (nothing spawned at all).
+        // Previously any "active && !running && !error" state showed
+        // "Starting gateway..." which was misleading on a fresh open where
+        // the singleton exists but the user hasn't clicked Start yet.
+        const running = status.active && status.wsConnected && status.processAlive;
+        const starting = status.active && status.processAlive && !status.wsConnected;
+        const hasError = status.active && !!status.error;
+        const idle = status.active && !status.processAlive && !status.error;
+
+        return (
         <div className={cn(
           'flex items-center gap-3 border-b px-6 py-2.5 text-[12px]',
           !status.active
             ? 'border-yellow-500/20 bg-yellow-500/5 text-yellow-700 dark:text-yellow-400'
-            : status.wsConnected && status.processAlive
+            : running
               ? 'border-green-500/20 bg-green-500/5 text-green-700 dark:text-green-400'
-              : status.error
+              : hasError
                 ? 'border-red-500/20 bg-red-500/5 text-red-700 dark:text-red-400'
-                : 'border-blue-500/20 bg-blue-500/5 text-blue-700 dark:text-blue-400',
+                : idle
+                  ? 'border-muted-foreground/20 bg-muted/30 text-muted-foreground'
+                  : 'border-blue-500/20 bg-blue-500/5 text-blue-700 dark:text-blue-400',
         )}>
           {!status.active ? (
             <>
@@ -416,7 +429,7 @@ export const OpenClawSessionsView: React.FC = () => {
                 </span>
               )}
             </>
-          ) : status.wsConnected && status.processAlive ? (
+          ) : running ? (
             <>
               <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
               <span>Gateway running on port <strong>{status.gatewayPort}</strong></span>
@@ -430,7 +443,7 @@ export const OpenClawSessionsView: React.FC = () => {
                 </code>
               )}
             </>
-          ) : status.error ? (
+          ) : hasError ? (
             <>
               <XCircle className="h-4 w-4 flex-shrink-0" />
               <span className="flex-1">{status.error}</span>
@@ -440,17 +453,25 @@ export const OpenClawSessionsView: React.FC = () => {
                 </code>
               )}
             </>
+          ) : idle ? (
+            <>
+              <AlertCircle className="h-4 w-4 flex-shrink-0 opacity-60" />
+              <span>Gateway not running — click <strong>Start</strong> to launch it on port <strong>{status.gatewayPort}</strong></span>
+            </>
+          ) : starting ? (
+            <>
+              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+              <span>Starting gateway (process alive, connecting WebSocket...)</span>
+            </>
           ) : (
             <>
               <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
-              <span>
-                Starting gateway
-                {status.processAlive ? ' (process alive, connecting WS...)' : '...'}
-              </span>
+              <span>Starting gateway...</span>
             </>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Log tail (collapsible) */}
       {status?.active && status.logTail && status.logTail.length > 0 && (

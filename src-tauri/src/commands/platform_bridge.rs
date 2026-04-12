@@ -64,17 +64,17 @@ pub struct FeishuConfig {
     pub app_secret: String,
     pub project_path: String,
     pub enabled: bool,
-    /// CLI backend to use: "claudecode" | "openclaw". Defaults to "openclaw"
-    /// so the OpenClaw Sessions view is usable out of the box. Existing users
-    /// whose platform-config.json explicitly sets agent_type keep their
-    /// choice; this default only applies when the field is missing or when
-    /// no config file exists.
+    /// CLI backend for the IM (Feishu) bridge: "claudecode" | "openclaw".
+    /// Defaults to "claudecode" — OpenClaw gateway is available regardless
+    /// of this setting, since the sidecar constructs a singleton OpenClawAgent
+    /// at startup that is reachable via /openclaw/* endpoints independently
+    /// of which agent handles IM messages.
     #[serde(default = "default_agent_type")]
     pub agent_type: String,
 }
 
 fn default_agent_type() -> String {
-    "openclaw".to_string()
+    "claudecode".to_string()
 }
 
 impl Default for FeishuConfig {
@@ -143,6 +143,24 @@ fn config_dir() -> Result<PathBuf, String> {
     dirs::home_dir()
         .map(|h| h.join(".anycode"))
         .ok_or_else(|| "Cannot find home directory".to_string())
+}
+
+/// Append a lifecycle event to the sidecar log file. Used to record
+/// spawn/kill/error events from the Rust parent so the user sees them
+/// in the same log stream as the sidecar's own stderr output.
+fn append_lifecycle_log(event: &str, detail: &str) {
+    let Ok(dir) = config_dir() else { return };
+    let path = dir.join("platform-sidecar.log");
+    // Best effort — never fail the parent operation because logging failed.
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+        let _ = writeln!(f, "[{}] [rust {}] {}", ts, event, detail);
+    }
 }
 
 fn config_path() -> Result<PathBuf, String> {
@@ -613,6 +631,8 @@ pub async fn platform_start(
     state: tauri::State<'_, PlatformBridgeState>,
     app: tauri::AppHandle,
 ) -> Result<BridgeStatusInfo, String> {
+    append_lifecycle_log("start", "platform_start command invoked");
+
     let inner = state.inner.clone();
     let mut g = inner.lock().await;
 
@@ -631,6 +651,7 @@ pub async fn platform_start(
     if let Some(mut child) = g.child.take() {
         let _ = child.kill().await;
         info!("Killed previous Platform sidecar");
+        append_lifecycle_log("kill", "killed previous sidecar before spawning new one");
     }
     g.port = None;
     g.feishu_status = None;
@@ -643,6 +664,7 @@ pub async fn platform_start(
     if !sidecar_path.exists() {
         g.status = BridgeStatus::Error;
         g.error = Some(format!("sidecar not found: {:?}", sidecar_path));
+        append_lifecycle_log("error", &format!("sidecar binary not found at {:?}", sidecar_path));
         return Err(g.error.clone().unwrap());
     }
 
@@ -662,7 +684,25 @@ pub async fn platform_start(
         }
     }
 
-    // Spawn
+    // Spawn — redirect stderr to a log file so the user can diagnose
+    // event subscription / agent errors from the sidecar.
+    // On each start, rename the old log with a timestamp so previous
+    // runs are preserved for debugging (e.g. platform-sidecar.2026-04-12_11-24-31.log).
+    let dir = config_dir()?;
+    let log_path = dir.join("platform-sidecar.log");
+    if log_path.exists() {
+        let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let archive = dir.join(format!("platform-sidecar.{}.log", ts));
+        let _ = std::fs::rename(&log_path, &archive);
+    }
+    let stderr_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| format!("open sidecar log: {}", e))?;
+    info!("Sidecar log: {:?}", log_path);
+
     let mut cmd = tokio::process::Command::new("node");
     cmd.arg(&sidecar_path)
         .arg("--port")
@@ -670,7 +710,7 @@ pub async fn platform_start(
         .arg("--config")
         .arg(cfg_path.to_string_lossy().as_ref())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::from(stderr_file));
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -701,12 +741,14 @@ pub async fn platform_start(
             let _ = child.kill().await;
             g.status = BridgeStatus::Error;
             g.error = Some(format!("read stdout: {}", e));
+            append_lifecycle_log("error", &format!("read stdout failed: {}", e));
             return Err(g.error.clone().unwrap());
         }
         Err(_) => {
             let _ = child.kill().await;
             g.status = BridgeStatus::Error;
             g.error = Some("sidecar did not emit READY within 10s".to_string());
+            append_lifecycle_log("error", "sidecar did not emit READY within 10s");
             return Err(g.error.clone().unwrap());
         }
     }
@@ -717,10 +759,31 @@ pub async fn platform_start(
         .strip_prefix("FROGCODE_PLATFORM_READY port=")
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| {
-            format!("unexpected sidecar stdout: {}", line.trim())
+            let msg = format!("unexpected sidecar stdout: {}", line.trim());
+            append_lifecycle_log("error", &msg);
+            msg
         })?;
 
     info!("Platform sidecar ready on port {}", port);
+    append_lifecycle_log("ready", &format!("sidecar READY on port {}", port));
+
+    // CRITICAL: keep reading stdout forever so the pipe stays open.
+    // The sidecar redirects console.* to stderr, but any rogue write to
+    // stdout (e.g. a dependency logging an unexpected warning) would
+    // cause EPIPE and crash the sidecar process if we don't drain. We
+    // just discard every line — interesting output already goes to stderr.
+    tauri::async_runtime::spawn(async move {
+        let mut drain = reader;
+        let mut discard = String::new();
+        loop {
+            discard.clear();
+            match drain.read_line(&mut discard).await {
+                Ok(0) => return, // EOF
+                Ok(_) => {}      // discard
+                Err(_) => return,
+            }
+        }
+    });
 
     // Abort channel for SSE listener
     let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
@@ -745,6 +808,8 @@ pub async fn platform_start(
 pub async fn platform_stop(
     state: tauri::State<'_, PlatformBridgeState>,
 ) -> Result<(), String> {
+    append_lifecycle_log("stop", "platform_stop command invoked");
+
     let inner = state.inner.clone();
     let mut g = inner.lock().await;
 
@@ -768,6 +833,7 @@ pub async fn platform_stop(
     if let Some(mut child) = g.child.take() {
         let _ = child.kill().await;
         info!("Platform sidecar process killed");
+        append_lifecycle_log("kill", "sidecar process killed (graceful stop)");
     }
 
     g.port = None;
@@ -775,7 +841,41 @@ pub async fn platform_stop(
     g.error = None;
     g.feishu_status = None;
 
+    append_lifecycle_log("stopped", "platform bridge state reset");
     Ok(())
+}
+
+/// Read the last N lines (default 200) from the sidecar stderr log.
+/// Useful for diagnosing "bot didn't respond" issues — every received
+/// Feishu event is logged there, so the user can tell the difference
+/// between "event not received" (empty log) and "event filtered out"
+/// (log shows the event but an early-return hit).
+#[tauri::command]
+pub async fn platform_read_log(
+    lines: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    let path = config_dir()?.join("platform-sidecar.log");
+    if !path.exists() {
+        return Ok(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "exists": false,
+            "lines": [],
+        }));
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("read log: {}", e))?;
+    let n = lines.unwrap_or(200);
+    let all: Vec<&str> = raw.lines().collect();
+    let tail: Vec<String> = all
+        .iter()
+        .skip(all.len().saturating_sub(n))
+        .map(|s| s.to_string())
+        .collect();
+    Ok(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "exists": true,
+        "totalLines": all.len(),
+        "lines": tail,
+    }))
 }
 
 #[tauri::command]
@@ -796,6 +896,7 @@ pub async fn platform_status(
 pub async fn platform_connect_feishu(
     state: tauri::State<'_, PlatformBridgeState>,
 ) -> Result<bool, String> {
+    append_lifecycle_log("feishu", "connect_feishu invoked");
     let g = state.inner.lock().await;
     let port = g.port.ok_or("sidecar not running")?;
     drop(g);
@@ -806,7 +907,18 @@ pub async fn platform_connect_feishu(
         .post(&url)
         .send()
         .await
-        .map_err(|e| format!("connect: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("connect: {}", e);
+            append_lifecycle_log("feishu-error", &msg);
+            msg
+        })?;
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("json: {}", e))?;
-    Ok(body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
+    let ok = body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if ok {
+        append_lifecycle_log("feishu", "Feishu WS connection succeeded");
+    } else {
+        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+        append_lifecycle_log("feishu-error", &format!("Feishu connect failed: {}", err));
+    }
+    Ok(ok)
 }

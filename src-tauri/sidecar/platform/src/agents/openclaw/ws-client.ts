@@ -258,7 +258,10 @@ export class OpenClawWsClient extends EventEmitter {
     const signedAtMs = Date.now();
     const role = 'operator';
     const scopes = ['operator.admin'];
-    const clientId = 'frogcode-platform';
+    // The gateway validates client.id against a whitelist of known clients.
+    // Use 'nexu' — this WS client was ported from nexu's codebase and the
+    // gateway recognizes it. 'frogcode-platform' isn't in the allowlist.
+    const clientId = 'nexu';
     const clientMode = 'backend';
     const platform = process.platform;
 

@@ -83,10 +83,10 @@ const DEFAULT_STATE_DIR = path.join(DEFAULT_RUNTIME_ROOT, 'state');
 const DEFAULT_TMP_DIR = path.join(DEFAULT_RUNTIME_ROOT, 'tmp');
 const DEFAULT_EXTENSIONS_DIR = path.join(DEFAULT_STATE_DIR, 'extensions');
 const DEFAULT_SKILLS_DIR = path.join(DEFAULT_STATE_DIR, 'skills');
-// 18790 to avoid conflict with a globally-installed standalone openclaw,
-// which defaults to 18789 and often auto-registers itself as a Windows
-// scheduled task ("OpenClaw Gateway") that permanently occupies that port.
-const DEFAULT_PORT = 18790;
+// 18789 is the canonical openclaw gateway port. If a globally installed
+// standalone openclaw is holding it (e.g. as a Windows scheduled task),
+// stop that instance — we don't work around the collision by moving ports.
+const DEFAULT_PORT = 18789;
 
 function log(level: string, ...parts: any[]) {
   const msg = parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ');
@@ -523,14 +523,37 @@ export class OpenClawAgent implements Agent {
     // openclaw's file watcher is not triggered unnecessarily.
     this.configWriter = this.configWriter ?? new OpenClawConfigWriter(configPath);
     try {
-      // On first cold start (no config file yet) bootstrap from the user's
-      // legacy ~/.openclaw/openclaw.json if present, otherwise from the
-      // bundled openclaw-template.json. Subsequent runs leave the file
-      // alone so user edits (providers, plugins, channels) are preserved.
+      let config: Record<string, any>;
       if (!fs.existsSync(configPath)) {
-        this.configWriter.write(this.bootstrapConfig());
-        log('info', `bootstrapped config at ${configPath}`);
+        // First cold start — bootstrap from legacy ~/.openclaw/openclaw.json
+        // or from the bundled openclaw-template.json.
+        config = this.bootstrapConfig();
+        log('info', `bootstrapping config at ${configPath}`);
+      } else {
+        // Existing config — load it, but force gateway.port/bind back to
+        // frogcode's source of truth every time. This fixes users stuck on
+        // an older bootstrap that wrote port 18789 before we switched to
+        // 18790, and guarantees the port we spawn on always matches the
+        // port the config tells openclaw to bind.
+        try {
+          config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        } catch (e: any) {
+          log('warn', `config JSON corrupt (${e.message}), re-bootstrapping`);
+          config = this.bootstrapConfig();
+        }
       }
+      // Force port + bind to our authoritative values. The writer's content
+      // dedup will skip the write if everything matches.
+      config.gateway = config.gateway || {};
+      if (config.gateway.port !== port) {
+        log('info', `rewriting gateway.port ${config.gateway.port} → ${port}`);
+        config.gateway.port = port;
+      }
+      if (config.gateway.bind !== 'loopback') {
+        log('info', `rewriting gateway.bind ${config.gateway.bind} → loopback`);
+        config.gateway.bind = 'loopback';
+      }
+      this.configWriter.write(config);
     } catch (err: any) {
       throw new Error(
         `failed to write openclaw config at ${configPath}: ${err.message || String(err)}`,
@@ -565,7 +588,8 @@ export class OpenClawAgent implements Agent {
       logPath,
     };
     this.processManager = new OpenClawProcessManager(procConfig);
-    this.processManager.enableAutoRestart();
+    // ONE-SHOT start — no auto-restart. If the gateway dies, the user
+    // clicks Start again from the OpenClaw Sessions view.
     this.processManager.start();
 
     // Start WS client

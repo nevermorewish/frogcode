@@ -4217,6 +4217,15 @@ export const api = {
       return await invoke("platform_connect_feishu");
     },
 
+    async readLog(lines?: number): Promise<{
+      path: string;
+      exists: boolean;
+      totalLines?: number;
+      lines: string[];
+    }> {
+      return await invoke("platform_read_log", { lines });
+    },
+
     async getAgentConfig(agentType: string): Promise<Record<string, any>> {
       return await invoke("platform_get_agent_config", { agentType });
     },

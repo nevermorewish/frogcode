@@ -145,6 +145,11 @@ export class OpenClawProcessManager extends EventEmitter {
     // Kill any orphan openclaw from a previous crashed run (recorded in pid file)
     reapOrphanFromPidFile(this.config.stateDir, (msg) => this.writeLog('info', msg));
 
+    // Clean up stale gateway lock files left by crashed openclaw processes.
+    // openclaw writes lock files to %TEMP%/openclaw/gateway.*.lock (or $TMPDIR)
+    // and checks them on startup — stale locks cause false "already running" errors.
+    cleanStaleLockFiles(this.config.tmpDir, (msg) => this.writeLog('info', msg));
+
     const cmd = this.config.binPath || 'openclaw';
     // Gateway mode, bind, and force behaviors now come from the config file:
     //   gateway.mode: 'local'   ← replaces --allow-unconfigured
@@ -490,5 +495,65 @@ function reapOrphanFromPidFile(stateDir: string, logFn: (msg: string) => void): 
       break;
     }
     break;
+  }
+}
+
+/**
+ * Remove stale gateway lock files whose owning PID is no longer alive.
+ * openclaw writes `gateway.<hash>.lock` containing `{"pid":…}` into its
+ * temp directory. If the process crashes without cleanup, the lock file
+ * persists and the next `openclaw gateway run` refuses to start with
+ * "gateway already running" / "Gateway service appears registered".
+ *
+ * We scan both the configured tmpDir and the OS default temp location
+ * (`%TEMP%/openclaw` on Windows, `/tmp/openclaw` elsewhere).
+ */
+function cleanStaleLockFiles(tmpDir: string, logFn: (msg: string) => void): void {
+  const osTmpOpenClaw = path.join(
+    process.env.TEMP || process.env.TMPDIR || '/tmp',
+    'openclaw',
+  );
+  const dirs = [tmpDir, osTmpOpenClaw];
+  // Deduplicate (tmpDir may already point to the OS temp location)
+  const seen = new Set<string>();
+
+  for (const dir of dirs) {
+    const resolved = path.resolve(dir);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(resolved);
+    } catch {
+      continue; // dir doesn't exist
+    }
+
+    for (const entry of entries) {
+      if (!entry.startsWith('gateway.') || !entry.endsWith('.lock')) continue;
+      const lockPath = path.join(resolved, entry);
+      try {
+        const raw = fs.readFileSync(lockPath, 'utf8');
+        const data = JSON.parse(raw);
+        const pid = data?.pid;
+        if (typeof pid !== 'number' || pid <= 0) continue;
+
+        // Check if the process is still alive
+        try {
+          process.kill(pid, 0);
+          // Process alive — leave it alone
+        } catch {
+          // Process dead — remove stale lock
+          fs.unlinkSync(lockPath);
+          logFn(`removed stale lock ${entry} (pid=${pid} dead)`);
+        }
+      } catch {
+        // Malformed lock file — remove it
+        try {
+          fs.unlinkSync(lockPath);
+          logFn(`removed malformed lock ${entry}`);
+        } catch { /* ignore */ }
+      }
+    }
   }
 }

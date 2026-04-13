@@ -24,8 +24,9 @@ use commands::platform_bridge::{
     platform_connect_feishu, platform_get_agent_config, platform_get_config,
     platform_get_openclaw_session, platform_get_openclaw_status, platform_list_openclaw_sessions,
     platform_openclaw_restart, platform_openclaw_start, platform_openclaw_stop,
-    platform_read_log, platform_save_agent_config, platform_save_config, platform_start,
-    platform_status, platform_stop, get_im_channels, save_im_channels, PlatformBridgeState,
+    platform_read_log, platform_reload_config, platform_save_agent_config, platform_save_config,
+    platform_start, platform_status, platform_stop, get_im_channels, save_im_channels,
+    PlatformBridgeState,
 };
 use commands::acemcp::{
     enhance_prompt_with_context, export_acemcp_sidecar, get_extracted_sidecar_path,
@@ -632,6 +633,7 @@ fn main() {
             platform_stop,
             platform_status,
             platform_connect_feishu,
+            platform_reload_config,
             platform_read_log,
             platform_get_openclaw_status,
             platform_openclaw_start,

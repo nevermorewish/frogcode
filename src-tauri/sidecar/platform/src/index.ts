@@ -220,7 +220,11 @@ function createAgent(type: AgentType): Agent {
 
 async function initAgentManager(type: AgentType): Promise<void> {
   if (agentManager) {
-    await agentManager.shutdown();
+    // Detach: close sessions and clean up listeners, but DON'T stop the
+    // underlying agent. This keeps the OpenClaw gateway alive when the
+    // user switches the IM channel assignment between Claude Code and
+    // OpenClaw — "openclaw 用户没点停止，就不能关闭".
+    await agentManager.detach();
     agentManager = null;
   }
   const agent = createAgent(type);
@@ -339,6 +343,24 @@ function extractTextFromPost(content: Record<string, unknown>): string {
 // ============================================================================
 // Feishu Event Handler
 // ============================================================================
+
+/** Simple TTL-based dedup cache to ignore duplicate Feishu event deliveries. */
+const recentMessageIds = new Map<string, number>();
+const DEDUP_TTL_MS = 30_000; // 30 seconds
+
+function isDuplicateMessage(messageId: string): boolean {
+  const now = Date.now();
+  // Prune expired entries periodically
+  if (recentMessageIds.size > 200) {
+    for (const [id, ts] of recentMessageIds) {
+      if (now - ts > DEDUP_TTL_MS) recentMessageIds.delete(id);
+    }
+  }
+  if (recentMessageIds.has(messageId)) return true;
+  recentMessageIds.set(messageId, now);
+  return false;
+}
+
 function createEventDispatcher(): lark.EventDispatcher {
   const dispatcher = new lark.EventDispatcher({});
   log('info', 'Registering feishu event handler: im.message.receive_v1');
@@ -362,6 +384,12 @@ function createEventDispatcher(): lark.EventDispatcher {
           'event',
           `RECV im.message.receive_v1 chat=${chatType}/${chatId?.slice(0, 12)} user=${userId?.slice(0, 12)} msg=${messageId?.slice(0, 12)} type=${msgType}`,
         );
+
+        // Deduplicate: Feishu may deliver the same event multiple times
+        if (messageId && isDuplicateMessage(messageId)) {
+          log('event', `DROP: duplicate messageId=${messageId.slice(0, 12)}`);
+          return;
+        }
 
         if (!['text', 'post', 'image', 'file'].includes(msgType)) {
           log('event', `DROP: unsupported msgType=${msgType}`);
@@ -759,6 +787,35 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { ok: false, error: e.message });
       }
     }
+    // Hot-reload: re-read config from disk, re-init agent if type changed,
+    // and reconnect Feishu. Used when switching IM channel assignment so we
+    // don't need to kill/restart the entire sidecar (which would kill OpenClaw).
+    if (m === 'POST' && p === '/reload') {
+      try {
+        const fresh = loadConfig(args.config);
+        if (fresh) {
+          const prevAgentType = currentConfig?.agentType;
+          currentConfig = fresh;
+          if (fresh.agentType !== prevAgentType) {
+            await initAgentManager(fresh.agentType);
+          }
+          // Disconnect existing Feishu WS so connectFeishu() creates a fresh one
+          // with the (possibly new) credentials.
+          await disconnectFeishu();
+          if (fresh.enabled && fresh.appId && fresh.appSecret) {
+            const r = await connectFeishu();
+            emitStatus();
+            return sendJson(res, r.ok ? 200 : 500, { ok: r.ok, error: r.error, reloaded: true });
+          }
+          emitStatus();
+          return sendJson(res, 200, { ok: true, reloaded: true });
+        }
+        return sendJson(res, 200, { ok: true, reloaded: false, reason: 'no config on disk' });
+      } catch (e: any) {
+        return sendJson(res, 500, { ok: false, error: e.message });
+      }
+    }
+
     if (m === 'POST' && p === '/connect') {
       const r = await connectFeishu();
       return sendJson(res, r.ok ? 200 : 500, r);

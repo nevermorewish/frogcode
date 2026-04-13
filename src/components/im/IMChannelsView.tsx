@@ -162,13 +162,22 @@ export const IMChannelsView: React.FC = () => {
         agentType: activeAgent,
         enabled: true,
       });
-      // Restart sidecar
-      try { await api.platform.stop(); } catch {}
-      await api.platform.start();
-      try { await api.platform.connectFeishu(); } catch {}
+      // Hot-reload: tell sidecar to re-read config and reconnect Feishu
+      // without restarting the process — keeps OpenClaw gateway alive.
+      const status = await api.platform.status().catch(() => ({ status: 'stopped' }));
+      if (status.status === 'running') {
+        try { await api.platform.reloadConfig(); } catch {}
+      } else {
+        await api.platform.start();
+        try { await api.platform.connectFeishu(); } catch {}
+      }
     } else {
       await api.platform.saveConfig({ ...cfg, enabled: false });
-      try { await api.platform.stop(); } catch {}
+      // Sidecar stays alive — just disconnect Feishu via reload
+      const status = await api.platform.status().catch(() => ({ status: 'stopped' }));
+      if (status.status === 'running') {
+        try { await api.platform.reloadConfig(); } catch {}
+      }
     }
   };
 

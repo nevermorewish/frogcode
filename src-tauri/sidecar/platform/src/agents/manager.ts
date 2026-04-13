@@ -174,7 +174,12 @@ export class AgentManager {
     deleteStoredSession(key);
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * Detach: close all sessions and clean up listeners, but do NOT stop the
+   * underlying agent. Used when hot-swapping agent types so the OpenClaw
+   * gateway stays alive across IM channel reassignment.
+   */
+  async detach(): Promise<void> {
     for (const session of this.sessions.values()) {
       try {
         await session.close();
@@ -183,7 +188,11 @@ export class AgentManager {
       }
     }
     this.sessions.clear();
-    await this.agent.stop();
     this.bus.removeAllListeners();
+  }
+
+  async shutdown(): Promise<void> {
+    await this.detach();
+    await this.agent.stop();
   }
 }

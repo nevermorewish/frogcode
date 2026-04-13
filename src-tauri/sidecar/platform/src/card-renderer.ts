@@ -312,7 +312,7 @@ export class CardRenderer {
     try {
       const resp = await (client as any).im.v1.messageReaction.create({
         path: { message_id: messageId },
-        data: { reaction_type: { emoji_type: 'EYES' } },
+        data: { reaction_type: { emoji_type: 'THUMBSUP' } },
       });
       const reactionId = resp?.data?.reaction_id;
       if (reactionId) {

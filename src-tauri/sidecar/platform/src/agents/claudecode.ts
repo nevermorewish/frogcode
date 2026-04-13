@@ -78,6 +78,18 @@ class ClaudeCodeSession implements AgentSession {
     if (this.closed) throw new Error('session closed');
     if (this.currentChild) throw new Error('a turn is already in flight');
 
+    const resumeId = this.sessionId;
+    const result = await this._doSpawn(opts, resumeId);
+
+    // If resume failed, clear the stale session and retry without --resume
+    if (result.sawError && resumeId) {
+      log('info', `resume ${resumeId} failed, retrying without --resume`);
+      this.sessionId = null;
+      await this._doSpawn(opts, null);
+    }
+  }
+
+  private async _doSpawn(opts: SendOpts, resumeId: string | null): Promise<{ sawError: boolean }> {
     // Prepend attached files as simple file references (matches Rust behaviour)
     const finalPrompt =
       opts.files && opts.files.length > 0
@@ -85,8 +97,8 @@ class ClaudeCodeSession implements AgentSession {
         : opts.prompt;
 
     const args: string[] = [];
-    if (this.sessionId) {
-      args.push('--resume', this.sessionId);
+    if (resumeId) {
+      args.push('--resume', resumeId);
     }
     args.push('--output-format', 'stream-json');
     args.push('--verbose');
@@ -98,7 +110,7 @@ class ClaudeCodeSession implements AgentSession {
     args.push('-p', finalPrompt);
 
     const binPath = this.config.binPath || 'claude';
-    log('info', `spawn ${binPath} cwd=${this.cwd} resume=${this.sessionId ?? 'none'}`);
+    log('info', `spawn ${binPath} cwd=${this.cwd} resume=${resumeId ?? 'none'}`);
 
     const child = spawn(binPath, args, {
       cwd: this.cwd,
@@ -111,11 +123,16 @@ class ClaudeCodeSession implements AgentSession {
     const startedAt = Date.now();
     const stderrBuf: string[] = [];
 
-    // Collect stderr (capped) for error reporting
+    // Collect stderr (capped) for error reporting + diagnostics
     child.stderr!.on('data', (chunk: Buffer) => {
       const s = chunk.toString();
       stderrBuf.push(s);
       if (stderrBuf.length > 32) stderrBuf.shift();
+      // Log stderr lines for diagnostics
+      for (const line of s.split('\n')) {
+        const t = line.trim();
+        if (t) log('stderr', t);
+      }
     });
 
     // Parse stdout JSONL line-by-line
@@ -248,6 +265,8 @@ class ClaudeCodeSession implements AgentSession {
               : 'claude reported an error'
           : undefined;
 
+        if (errorMsg) log('error', `result error: ${errorMsg}`);
+
         emit({
           type: 'result',
           costUsd,
@@ -267,8 +286,9 @@ class ClaudeCodeSession implements AgentSession {
 
         // If we never saw a `result` event, synthesize one so the UI finalizes
         if (!sawResult) {
+          sawError = code !== 0 && code !== null;
           const stderr = stderrBuf.join('').slice(-500);
-          if (code !== 0 && code !== null) {
+          if (sawError) {
             emit({
               type: 'result',
               durationMs: lastDurationMs ?? Date.now() - startedAt,
@@ -294,6 +314,7 @@ class ClaudeCodeSession implements AgentSession {
       child.on('error', (err) => {
         rl.close();
         this.currentChild = null;
+        sawError = true;
         emit({
           type: 'result',
           durationMs: Date.now() - startedAt,
@@ -302,6 +323,8 @@ class ClaudeCodeSession implements AgentSession {
         resolve();
       });
     });
+
+    return { sawError };
   }
 
   async cancel(): Promise<void> {

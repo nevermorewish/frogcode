@@ -948,6 +948,17 @@ pub async fn platform_status(
     })
 }
 
+/// POST /reload to the sidecar — hot-reload config from disk, re-init agent
+/// if type changed, and reconnect Feishu. Does NOT restart the sidecar process,
+/// so the OpenClaw gateway stays alive across IM channel reassignment.
+#[tauri::command]
+pub async fn platform_reload_config(
+    state: tauri::State<'_, PlatformBridgeState>,
+) -> Result<serde_json::Value, String> {
+    append_lifecycle_log("reload", "platform_reload_config invoked");
+    sidecar_post(&state, "/reload").await
+}
+
 /// POST /connect to the sidecar to trigger Feishu connection
 #[tauri::command]
 pub async fn platform_connect_feishu(

@@ -4239,6 +4239,12 @@ export const api = {
       return await invoke("platform_connect_feishu");
     },
 
+    /** Hot-reload config from disk, re-init agent if type changed, reconnect Feishu.
+     *  Does NOT restart the sidecar — OpenClaw gateway stays alive. */
+    async reloadConfig(): Promise<{ ok: boolean; error?: string }> {
+      return await invoke("platform_reload_config");
+    },
+
     async readLog(lines?: number): Promise<{
       path: string;
       exists: boolean;

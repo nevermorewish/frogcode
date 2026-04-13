@@ -21,6 +21,7 @@
  *   { binPath, stateDir, gatewayPort, gatewayToken, controlUiOrigins }
  */
 
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
@@ -261,59 +262,161 @@ class OpenClawSession implements AgentSession {
 
     const emit = (evt: AgentEvent) => this.emitter.emit('event', evt);
 
-    // Build the RPC params
+    // Build the RPC params (OpenClaw chat.send schema)
     const params: Record<string, unknown> = {
-      prompt: opts.prompt,
+      message: opts.prompt,
       sessionKey: this.sessionKey,
+      idempotencyKey: randomUUID(),
     };
-    if (this.sessionId) {
-      params.sessionId = this.sessionId;
-    }
     if (opts.files?.length) {
-      params.files = opts.files;
+      params.attachments = opts.files;
     }
 
     emit({ type: 'system' });
 
     const startedAt = Date.now();
     try {
-      // Send prompt to openclaw gateway via RPC. The gateway processes
-      // the message and returns a result with the full response.
-      // TODO: For streaming, we may need to subscribe to session events
-      // via the WS event stream and emit incremental AgentEvent.
+      // chat.send returns immediately with { runId, status } — the actual
+      // AI response arrives asynchronously via WS gateway events.
       const result = await this.ws.request<any>('chat.send', params, {
-        timeoutMs: 300_000, // 5 min for long tasks
+        timeoutMs: 30_000,
       });
 
-      // Extract session id
-      if (typeof result?.sessionId === 'string') {
-        this.sessionId = result.sessionId;
-        emit({ type: 'session', sessionId: result.sessionId });
+      log('info', `chat.send response: ${JSON.stringify(result)?.slice(0, 500)}`);
+
+      const runId = typeof result?.runId === 'string' ? result.runId : null;
+      if (runId) {
+        this.sessionId = runId;
+        emit({ type: 'session', sessionId: runId });
       }
 
-      // Normalize response
-      if (typeof result?.text === 'string') {
+      // If the response already contains the full text (synchronous mode),
+      // emit it directly and we're done.
+      if (typeof result?.text === 'string' && result.text) {
         emit({ type: 'text', delta: result.text });
-      }
-
-      // Tool calls if returned
-      if (Array.isArray(result?.toolCalls)) {
-        for (const tc of result.toolCalls) {
-          emit({ type: 'tool_use', name: tc.name || 'tool', detail: tc.detail || '' });
-          emit({ type: 'tool_result', ok: !tc.error });
+        if (Array.isArray(result.toolCalls)) {
+          for (const tc of result.toolCalls) {
+            emit({ type: 'tool_use', name: tc.name || 'tool', detail: tc.detail || '' });
+            emit({ type: 'tool_result', ok: !tc.error });
+          }
         }
+        emit({
+          type: 'result',
+          durationMs: Date.now() - startedAt,
+          costUsd: typeof result.costUsd === 'number' ? result.costUsd : undefined,
+          totalTokens: typeof result.totalTokens === 'number' ? result.totalTokens : undefined,
+        });
+        return;
       }
 
-      // Stats
-      emit({
-        type: 'result',
-        durationMs: Date.now() - startedAt,
-        costUsd: typeof result?.costUsd === 'number' ? result.costUsd : undefined,
-        totalTokens: typeof result?.totalTokens === 'number' ? result.totalTokens : undefined,
-        contextWindow: typeof result?.contextWindow === 'number' ? result.contextWindow : undefined,
-        error: result?.error ? String(result.error) : undefined,
+      // Async mode — subscribe to WS gateway events and wait for the run
+      // to complete. OpenClaw event format (from logs):
+      //
+      //   event "agent"  stream="assistant"  data.delta → text chunk
+      //   event "agent"  stream="lifecycle"  data.phase="start" → run started
+      //   event "agent"  stream="lifecycle"  data.phase="end"   → run finished
+      //   event "agent"  stream="tool_use"   → tool call
+      //   event "agent"  stream="tool_result" → tool result
+      //   event "chat"   state="delta"  message.content → incremental message
+      //   event "chat"   state="final"  message.content → final complete message
+      //
+      // Each event carries a runId — we filter to only process events for our run.
+      await new Promise<void>((resolve) => {
+        const TIMEOUT_MS = 300_000; // 5 min
+        let resolved = false;
+
+        const finish = (error?: string) => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timer);
+          this.ws.off('gateway-event', onEvent);
+          emit({
+            type: 'result',
+            durationMs: Date.now() - startedAt,
+            error,
+          });
+          resolve();
+        };
+
+        const timer = setTimeout(() => {
+          finish('openclaw response timed out (5min)');
+        }, TIMEOUT_MS);
+
+        const onEvent = (eventName: string, payload: any) => {
+          // Filter: only process events for our run
+          if (runId && payload?.runId && payload.runId !== runId) return;
+
+          // ── "agent" events ──────────────────────────────────────────
+          if (eventName === 'agent') {
+            const stream = payload?.stream;
+            const data = payload?.data;
+
+            if (stream === 'assistant' && typeof data?.delta === 'string') {
+              emit({ type: 'text', delta: data.delta });
+              return;
+            }
+
+            if (stream === 'lifecycle') {
+              if (data?.phase === 'end') {
+                finish();
+                return;
+              }
+              // phase === 'start' — no action needed
+              return;
+            }
+
+            if (stream === 'tool_use' || stream === 'tool_call') {
+              emit({
+                type: 'tool_use',
+                name: data?.name || data?.tool || 'tool',
+                detail: typeof data?.detail === 'string' ? data.detail : '',
+              });
+              return;
+            }
+
+            if (stream === 'tool_result') {
+              emit({ type: 'tool_result', ok: !data?.error });
+              return;
+            }
+
+            if (stream === 'error') {
+              finish(data?.message || data?.error || 'openclaw agent error');
+              return;
+            }
+            return;
+          }
+
+          // ── "chat" events (alternative completion path) ─────────────
+          if (eventName === 'chat') {
+            if (payload?.state === 'final') {
+              // Extract final text from message content
+              const content = payload?.message?.content;
+              if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (block?.type === 'text' && typeof block.text === 'string') {
+                    // Only emit if we haven't streamed deltas (avoid double text)
+                    // The card renderer handles dedup, so safe to emit
+                  }
+                }
+              }
+              finish();
+              return;
+            }
+            // state === 'delta' — already covered by agent/assistant events
+            return;
+          }
+
+          // ── "error" event ───────────────────────────────────────────
+          if (eventName === 'error') {
+            finish(payload?.message || payload?.error || 'openclaw error');
+            return;
+          }
+        };
+
+        this.ws.on('gateway-event', onEvent);
       });
     } catch (err: any) {
+      log('error', `send failed: ${err.message}`);
       emit({
         type: 'result',
         durationMs: Date.now() - startedAt,

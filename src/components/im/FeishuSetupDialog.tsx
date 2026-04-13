@@ -3,7 +3,7 @@
  * Saves to im-channels.json. Agent assignment is handled in IMChannelsView.
  */
 import React, { useState } from 'react';
-import { ExternalLink, Loader2, AlertCircle } from 'lucide-react';
+import { ExternalLink, Loader2, AlertCircle, Terminal, CircleOff } from 'lucide-react';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 import {
   Dialog,
@@ -13,8 +13,17 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select';
 import { api, type IMChannelConfig } from '@/lib/api';
 import { useTranslation } from 'react-i18next';
+
+type AgentAssignment = 'claudecode' | 'openclaw' | 'none';
 
 const FEISHU_CREDENTIALS_URL = 'https://open.feishu.cn/app';
 const FEISHU_TUTORIAL_URL = 'https://open.feishu.cn/document/home/introduction-to-custom-app-development/self-built-application-development-process';
@@ -41,6 +50,7 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   const [label, setLabel] = useState('');
+  const [assignment, setAssignment] = useState<AgentAssignment>('none');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,6 +74,7 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
         // Update
         existing.appSecret = trimmedSecret;
         existing.label = label.trim();
+        existing.assignment = assignment;
       } else {
         // Add new
         channels.push({
@@ -72,8 +83,17 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
           appId: trimmedId,
           appSecret: trimmedSecret,
           label: label.trim(),
-          assignment: 'none',
+          assignment,
         });
+      }
+
+      // Each agent can only have one channel — unassign others with the same agent
+      if (assignment !== 'none') {
+        for (const ch of channels) {
+          if (ch.appId !== trimmedId && ch.assignment === assignment) {
+            ch.assignment = 'none';
+          }
+        }
       }
 
       await api.saveImChannels({ channels });
@@ -82,6 +102,7 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
       setAppId('');
       setAppSecret('');
       setLabel('');
+      setAssignment('none');
       onConnected?.();
       onOpenChange(false);
     } catch (e: any) {
@@ -170,6 +191,60 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
               autoComplete="off"
               disabled={saving}
             />
+          </div>
+
+          {/* AI Backend */}
+          <div>
+            <label className="text-[12px] font-medium text-foreground">
+              {t('home.imChannel.feishu.setup.backendLabel', 'AI 后端')}
+              <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                ({t('common.optional', '可选')})
+              </span>
+            </label>
+            <Select
+              value={assignment}
+              onValueChange={(v) => setAssignment(v as AgentAssignment)}
+              disabled={saving}
+            >
+              <SelectTrigger className="mt-1.5 text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">
+                  <span className="flex items-center gap-2">
+                    <CircleOff className="h-3.5 w-3.5 text-muted-foreground" />
+                    {t('imChannels.unassigned', '未分配')}
+                  </span>
+                </SelectItem>
+                <SelectItem value="claudecode">
+                  <span className="flex items-center gap-2">
+                    <Terminal className="h-3.5 w-3.5" />
+                    Claude Code
+                  </span>
+                </SelectItem>
+                <SelectItem value="openclaw">
+                  <span className="flex items-center gap-2">
+                    <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5">
+                      <defs>
+                        <linearGradient id="oc-sel" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#ff4d4d" />
+                          <stop offset="100%" stopColor="#991b1b" />
+                        </linearGradient>
+                      </defs>
+                      <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="url(#oc-sel)" />
+                      <circle cx="45" cy="35" r="6" fill="#050810" />
+                      <circle cx="75" cy="35" r="6" fill="#050810" />
+                      <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
+                      <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
+                    </svg>
+                    OpenClaw
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {t('home.imChannel.feishu.setup.backendHint', '选择 AI 后端，也可以稍后在通道列表中更改')}
+            </p>
           </div>
 
           <div className="text-[11px] text-muted-foreground">

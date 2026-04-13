@@ -102,6 +102,50 @@ interface PlatformConfig {
   openclawAutoStart?: boolean;
 }
 
+// ============================================================================
+// Kill old frogcode sidecar processes on startup
+// ============================================================================
+const SIDECAR_TITLE = 'frogcode-platform-sidecar';
+
+// Set process title so we can identify our processes later
+process.title = SIDECAR_TITLE;
+
+/**
+ * Kill all existing node processes with our title, then grab the port.
+ * On Windows: use wmic to find by CommandLine containing our title.
+ */
+function killOldSidecars(): void {
+  try {
+    const { execSync } = require('child_process') as typeof import('child_process');
+    if (process.platform === 'win32') {
+      // Find node processes whose command line contains our sidecar script name
+      const out = execSync(
+        'wmic process where "name=\'node.exe\'" get ProcessId,CommandLine /format:csv',
+        { encoding: 'utf8', timeout: 5000, windowsHide: true },
+      );
+      for (const line of out.split('\n')) {
+        if (!line.includes('frogcode-platform-sidecar')) continue;
+        const parts = line.trim().split(',');
+        const pid = parseInt(parts[parts.length - 1], 10);
+        if (!pid || pid === process.pid) continue;
+        log('info', `killing old sidecar pid=${pid}`);
+        try {
+          execSync(`taskkill /PID ${pid} /F /T`, { timeout: 3000, windowsHide: true });
+        } catch {}
+      }
+    } else {
+      // Unix: pkill by process title
+      try {
+        execSync(`pkill -f "${SIDECAR_TITLE}" || true`, { timeout: 3000 });
+      } catch {}
+    }
+  } catch (e: any) {
+    log('warn', 'killOldSidecars:', e.message);
+  }
+}
+
+killOldSidecars();
+
 const startedAt = Date.now();
 let platformConfig: PlatformConfig | null = null;
 
@@ -205,6 +249,8 @@ interface BotConnection {
   cardRenderer: CardRenderer;
   status: 'stopped' | 'starting' | 'running' | 'error';
   error: string | null;
+  /** Track recent chats so we can send notification cards on assignment switch. */
+  recentChats: Map<string, string>; // chatId → userId
 }
 
 const bots = new Map<string, BotConnection>();
@@ -346,23 +392,55 @@ async function sendNotificationCard(client: lark.Client, chatId: string, cardJso
   }
 }
 
+/**
+ * Fetch all P2P chats the bot is in via Feishu API, then send a notification
+ * card to each. Used when recentChats is empty (e.g. sidecar just started).
+ */
+async function broadcastNotificationCard(client: lark.Client, cardJson: string): Promise<number> {
+  let sent = 0;
+  try {
+    const resp = await (client as any).im.v1.chat.list({
+      params: { page_size: 50 },
+    });
+    const items = resp?.data?.items || [];
+    for (const chat of items) {
+      // Only send to P2P chats — group chats can be noisy
+      if (chat.chat_type !== 'p2p' || !chat.chat_id) continue;
+      try {
+        await client.im.v1.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { receive_id: chat.chat_id, content: cardJson, msg_type: 'interactive' },
+        });
+        sent++;
+      } catch (e: any) {
+        log('warn', `broadcastNotificationCard chat=${chat.chat_id?.slice(0, 12)}: ${e.message?.slice(0, 80)}`);
+      }
+    }
+  } catch (e: any) {
+    log('warn', 'broadcastNotificationCard list chats failed:', e.message?.slice(0, 120));
+  }
+  return sent;
+}
+
 // ============================================================================
 // Feishu Event Handler — per-bot
 // ============================================================================
 
-/** Simple TTL-based dedup cache to ignore duplicate Feishu event deliveries. */
+/** Per-bot TTL-based dedup cache to ignore duplicate Feishu event deliveries.
+ *  Key includes appId so group-chat events are deduplicated per bot, not globally. */
 const recentMessageIds = new Map<string, number>();
 const DEDUP_TTL_MS = 30_000;
 
-function isDuplicateMessage(messageId: string): boolean {
+function isDuplicateMessage(appId: string, messageId: string): boolean {
+  const key = `${appId}:${messageId}`;
   const now = Date.now();
-  if (recentMessageIds.size > 200) {
+  if (recentMessageIds.size > 400) {
     for (const [id, ts] of recentMessageIds) {
       if (now - ts > DEDUP_TTL_MS) recentMessageIds.delete(id);
     }
   }
-  if (recentMessageIds.has(messageId)) return true;
-  recentMessageIds.set(messageId, now);
+  if (recentMessageIds.has(key)) return true;
+  recentMessageIds.set(key, now);
   return false;
 }
 
@@ -386,7 +464,7 @@ function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
           `[${bot.appId.slice(0, 12)}] RECV chat=${chatType}/${chatId?.slice(0, 12)} user=${userId?.slice(0, 12)} msg=${messageId?.slice(0, 12)} type=${msgType}`,
         );
 
-        if (messageId && isDuplicateMessage(messageId)) {
+        if (messageId && isDuplicateMessage(bot.appId, messageId)) {
           log('event', `DROP: duplicate messageId=${messageId.slice(0, 12)}`);
           return;
         }
@@ -456,6 +534,9 @@ function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
           `[${bot.appId.slice(0, 12)}] [${chatType}] ${userId.slice(0, 12)}: ${text.slice(0, 80)}${imageKey ? ' +img' : ''}${fileKey ? ' +file' : ''}`,
         );
 
+        // Track recent chats for notification cards on assignment switch
+        bot.recentChats.set(chatId, userId);
+
         // ─── Unassigned bot: reply with "未分配" message ─────────────
         if (bot.assignment === 'none' || !bot.agentManager) {
           log('info', `[${bot.appId.slice(0, 12)}] bot unassigned, sending 未分配 reply`);
@@ -524,8 +605,14 @@ function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
           `[${bot.appId.slice(0, 12)}] DISPATCH → agent=${bot.agentManager.agentName} prompt="${text.slice(0, 40)}" files=${files.length}`,
         );
 
-        // Begin card rendering for this turn
-        bot.cardRenderer.begin(chatId, messageId, userId);
+        // Begin card rendering for this turn — if there's already an
+        // active card (previous turn still running), don't create a new one
+        // to avoid orphaning the old card at "Running" forever.
+        const cardStarted = bot.cardRenderer.begin(chatId, messageId, userId);
+        if (!cardStarted) {
+          await sendText(bot.larkClient, chatId, '\u23F3 当前有任务正在执行，请等待完成后再发送新消息。', userId);
+          return;
+        }
         bot.cardRenderer.addTypingReaction(chatId, messageId).catch(() => {});
 
         try {
@@ -597,6 +684,7 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
     cardRenderer,
     status: 'starting',
     error: null,
+    recentChats: new Map(),
   };
 
   // Fetch bot's own open_id for group-chat @mention matching
@@ -694,22 +782,41 @@ async function _reconcileBotsInner(): Promise<void> {
     const existing = bots.get(ch.appId);
 
     if (!existing) {
-      // New channel — connect if assigned, skip if unassigned
-      if (ch.assignment !== 'none') {
-        await connectBot(ch);
-      }
+      // New channel — connect (both assigned and unassigned bots connect,
+      // so unassigned bots can reply "该机器人还未分配CLI")
+      await connectBot(ch);
     } else if (existing.assignment !== ch.assignment) {
       // Assignment changed
       const oldAssignment = existing.assignment;
       const newAssignment = ch.assignment;
+      const agentLabel = newAssignment === 'claudecode' ? 'Claude Code'
+        : newAssignment === 'openclaw' ? 'OpenClaw' : '';
 
       if (newAssignment === 'none') {
-        // Switched to unassigned → send farewell card → disconnect
-        log('info', `[${ch.appId.slice(0, 12)}] switched to unassigned, sending farewell`);
-        // Send farewell card on ALL recent chats? No — we just send via a generic approach.
-        // The bot is still connected briefly, so if any chat is active we notify.
-        // For simplicity, just disconnect. The card was sent from the frontend notification.
-        await disconnectBot(ch.appId);
+        // Switched to unassigned → send farewell card to all recent chats
+        log('info', `[${ch.appId.slice(0, 12)}] switched to unassigned, sending farewell cards`);
+        const oldLabel = oldAssignment === 'claudecode' ? 'Claude Code'
+          : oldAssignment === 'openclaw' ? 'OpenClaw' : 'CLI';
+        const card = buildNotificationCard(
+          '\u{1F534} 已断开连接',
+          'red',
+          `该机器人已断开 **${oldLabel}** 后端连接。\n\n如需继续使用，请在 Frog Code 应用中重新分配 CLI 后端。`,
+        );
+        if (existing.recentChats.size > 0) {
+          for (const [chatId, uId] of existing.recentChats) {
+            await sendNotificationCard(existing.larkClient, chatId, card, uId);
+          }
+        } else {
+          await broadcastNotificationCard(existing.larkClient, card);
+        }
+        // Detach agentManager but keep bot connected (so it can reply "未分配")
+        if (existing.agentManager) {
+          try { await existing.agentManager.detach(); } catch {}
+        }
+        existing.agentManager = null;
+        existing.assignment = 'none';
+        existing.label = ch.label;
+        emitStatus();
       } else {
         // Switched to a different agent
         log('info', `[${ch.appId.slice(0, 12)}] switching ${oldAssignment} → ${newAssignment}`);
@@ -732,6 +839,24 @@ async function _reconcileBotsInner(): Promise<void> {
         existing.agentManager = agentManager;
         existing.assignment = newAssignment as AgentType | 'none';
         existing.label = ch.label;
+
+        // Send success notification card
+        const card = buildNotificationCard(
+          '\u{1F7E2} 连接成功',
+          'green',
+          `该机器人已成功连接 **${agentLabel}** 后端。\n\n现在可以直接发送消息开始 AI 对话。`,
+        );
+        if (existing.recentChats.size > 0) {
+          for (const [chatId, uId] of existing.recentChats) {
+            await sendNotificationCard(existing.larkClient, chatId, card, uId);
+          }
+        } else {
+          // No recent chats — fetch bot's P2P chat list from Feishu API and send
+          log('info', `[${ch.appId.slice(0, 12)}] no recent chats, fetching chat list to send notification`);
+          const sent = await broadcastNotificationCard(existing.larkClient, card);
+          log('info', `[${ch.appId.slice(0, 12)}] notification card sent to ${sent} P2P chats`);
+        }
+
         log('info', `[${ch.appId.slice(0, 12)}] now assigned to ${newAssignment}`);
         emitStatus();
       }

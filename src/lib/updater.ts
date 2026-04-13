@@ -1,8 +1,14 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 
 // 可选导入：在未注册插件或非 Tauri 环境下，调用时会抛错，外层需做兜底
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports
 import type { Update } from "@tauri-apps/plugin-updater";
+
+/** Write a log line to the system log file (visible in 日志 page). */
+function syslog(level: string, msg: string) {
+  invoke("platform_write_log", { level, message: `[updater] ${msg}` }).catch(() => {});
+}
 
 
 export type UpdateChannel = "stable" | "beta";
@@ -92,10 +98,15 @@ export async function checkForUpdate(
 ): Promise<CheckResult> {
   try {
     // 动态引入，避免在未安装插件时导致打包期问题
+    syslog('info', 'Starting update check...');
     const { check } = await import("@tauri-apps/plugin-updater");
     const currentVersion = await getCurrentVersion();
+    syslog('info', `Current version: ${currentVersion}`);
+    syslog('info', `Checking endpoint with timeout=${opts.timeout ?? 30000}ms`);
     const update = await check({ timeout: opts.timeout ?? 30000 } as any);
+    syslog('info', `Check response: ${update ? `version=${(update as any).version}` : 'null (up-to-date)'}`);
     if (!update) {
+      syslog('info', 'Result: up-to-date');
       return { status: "up-to-date", currentVersion };
     }
 
@@ -107,9 +118,10 @@ export async function checkForUpdate(
       pubDate: mapped.date,
     };
 
+    syslog('info', `Result: update available ${currentVersion} → ${mapped.version}`);
     return { status: "available", info, update: mapped };
   } catch (error) {
-    console.error('[Updater] Check failed:', error);
+    syslog('error', `Check failed: ${error instanceof Error ? error.message : String(error)}`);
 
     // 提供详细的错误信息
     let errorMessage = '检查更新失败';

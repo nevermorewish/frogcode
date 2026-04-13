@@ -136,6 +136,36 @@ impl Default for PlatformBridgeState {
     }
 }
 
+impl PlatformBridgeState {
+    /// Synchronously kill the sidecar child process by PID.
+    /// Safe to call from a non-async context (e.g. window close handler).
+    pub fn kill_child_sync(&self) {
+        let Ok(mut g) = self.inner.try_lock() else { return };
+        if let Some(ref child) = g.child {
+            if let Some(pid) = child.id() {
+                info!("kill_child_sync: killing sidecar pid={}", pid);
+                #[cfg(target_os = "windows")]
+                {
+                    #[allow(unused_imports)]
+                    use std::os::windows::process::CommandExt;
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/F", "/T"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .output();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                }
+                append_lifecycle_log("kill", &format!("sidecar killed sync pid={}", pid));
+            }
+        }
+        g.child = None;
+        g.status = BridgeStatus::Stopped;
+        g.port = None;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Config file helpers
 // ---------------------------------------------------------------------------
@@ -842,10 +872,6 @@ pub async fn platform_start(
     append_lifecycle_log("ready", &format!("sidecar READY on port {}", port));
 
     // CRITICAL: keep reading stdout forever so the pipe stays open.
-    // The sidecar redirects console.* to stderr, but any rogue write to
-    // stdout (e.g. a dependency logging an unexpected warning) would
-    // cause EPIPE and crash the sidecar process if we don't drain. We
-    // just discard every line — interesting output already goes to stderr.
     tauri::async_runtime::spawn(async move {
         let mut drain = reader;
         let mut discard = String::new();

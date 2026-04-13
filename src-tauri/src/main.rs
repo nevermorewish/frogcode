@@ -321,12 +321,11 @@ fn main() {
                 if window_label == "main" {
                     log::info!("[Window] Main window closing, closing all session windows");
 
-                    // Stop platform bridge sidecar if running
-                    let app_for_platform = window.app_handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        let state = app_for_platform.state::<PlatformBridgeState>();
-                        let _ = commands::platform_bridge::platform_stop(state).await;
-                    });
+                    // Kill platform bridge sidecar SYNCHRONOUSLY before app exits.
+                    // Cannot use async spawn here — the Tokio runtime may be
+                    // dropped before the task completes, leaving the sidecar as
+                    // an orphan that keeps its Feishu WebSocket alive.
+                    window.app_handle().state::<PlatformBridgeState>().kill_child_sync();
 
                     let app = window.app_handle();
                     let windows_to_close: Vec<String> = app

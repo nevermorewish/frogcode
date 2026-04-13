@@ -5,8 +5,13 @@ import React, {
   useEffect,
   useCallback,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { UpdateInfo, UpdateHandle } from "../lib/updater";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
+
+function syslog(level: string, msg: string) {
+  invoke("platform_write_log", { level, message: `[updater] ${msg}` }).catch(() => {});
+}
 
 interface UpdateContextValue {
   // 更新状态
@@ -125,7 +130,12 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // 延迟2秒后检查，避免影响启动体验
     const timer = setTimeout(() => {
-      checkUpdate(false).catch(console.error);
+      syslog('info', 'Auto-checking for updates on startup...');
+      checkUpdate(false).then((hasUpd) => {
+        syslog('info', `Auto-check result: hasUpdate=${hasUpd}`);
+      }).catch((err) => {
+        syslog('error', `Auto-check error: ${err}`);
+      });
     }, 2000);
 
     return () => clearTimeout(timer);

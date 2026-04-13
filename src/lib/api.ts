@@ -4254,6 +4254,11 @@ export const api = {
       return await invoke("platform_read_log", { lines });
     },
 
+    /** Write a log line to the sidecar log file (visible in system log view). */
+    async writeLog(level: string, message: string): Promise<void> {
+      return await invoke("platform_write_log", { level, message });
+    },
+
     async getAgentConfig(agentType: string): Promise<Record<string, any>> {
       return await invoke("platform_get_agent_config", { agentType });
     },

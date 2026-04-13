@@ -179,14 +179,28 @@ export class CardRenderer {
     this.deps.larkClient = client;
   }
 
+  /** Check whether a card turn is currently active for a chatId. */
+  hasActiveChat(chatId: string): boolean {
+    return this.chats.has(chatId);
+  }
+
   /**
    * Begin tracking a new turn for a chat.
    * chatId is the Feishu chat_id; replyToMessageId for thread mode.
    * userId is the sender's open_id — used as fallback when chat_id send fails.
+   *
+   * If there is already an active (non-finalized) card for this chatId,
+   * the call is SKIPPED to prevent orphaning the previous card at "Running".
+   * Returns true if a new turn was started, false if skipped.
    */
-  begin(chatId: string, replyToMessageId?: string, userId?: string): void {
-    // Clean up any existing flush timer
+  begin(chatId: string, replyToMessageId?: string, userId?: string): boolean {
     const existing = this.chats.get(chatId);
+    // Guard: if there's already an active card (not finalized), skip
+    if (existing && existing.cardState.status !== 'complete' && existing.cardState.status !== 'error') {
+      log('warn', `begin: chatId=${chatId.slice(0, 12)} already has active card (${existing.cardState.status}), skipping`);
+      return false;
+    }
+    // Clean up any existing flush timer
     if (existing?.flushTimer) clearTimeout(existing.flushTimer);
 
     this.chats.set(chatId, {
@@ -198,6 +212,7 @@ export class CardRenderer {
       userId,
       createPromise: null,
     });
+    return true;
   }
 
   /**

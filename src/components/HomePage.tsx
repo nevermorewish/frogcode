@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   CheckCircle2,
   XCircle,
@@ -709,10 +710,15 @@ const IMChannelCard: React.FC<{ step?: number }> = ({ step }) => {
 
 export const HomePage: React.FC = () => {
   const { t } = useTranslation();
+  const [appVersion, setAppVersion] = useState('');
   const [toast, setToast] = useState<{
     message: string;
     type: 'success' | 'error' | 'info';
   } | null>(null);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
 
   const showToast = useCallback(
     (message: string, type: 'success' | 'error' | 'info') => {
@@ -725,7 +731,12 @@ export const HomePage: React.FC = () => {
     <div className="flex-1 overflow-y-auto">
       <div className="container mx-auto max-w-5xl p-6">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight">{t('home.title')}</h1>
+          <h1 className="text-3xl font-bold tracking-tight">
+            {t('home.title')}
+            {appVersion && (
+              <span className="ml-3 align-middle text-sm font-normal text-muted-foreground">v{appVersion}</span>
+            )}
+          </h1>
           <div className="mt-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <p className="mb-2 text-sm font-medium text-foreground">
               {t('home.guideTitle', '三步快速上手')}

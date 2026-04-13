@@ -55,6 +55,8 @@ pub struct FrogclawToken {
     pub status: i64,
     pub remain_quota: i64,
     pub unlimited_quota: bool,
+    #[serde(default)]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -16,13 +16,17 @@ import {
   MessageSquare,
   ExternalLink,
   Play,
+  Bot,
+  Sparkles,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Toast, ToastContainer } from '@/components/ui/toast';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, type EngineId } from '@/contexts/AuthContext';
 import { useNavigation } from '@/contexts/NavigationContext';
 import { usePlatformStatus } from '@/hooks/usePlatformStatus';
 
@@ -42,7 +46,7 @@ interface ToolStatus {
 interface FeatureCardProps {
   icon: React.ReactNode;
   title: string;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   headerRight?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
@@ -86,7 +90,7 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
           <div className="min-w-0">
             <h2 className="text-base font-semibold leading-tight">{title}</h2>
             {subtitle && (
-              <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
+              <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>
             )}
           </div>
         </div>
@@ -403,12 +407,45 @@ const DevEnvironmentCard: React.FC<{
 // Frogclaw Connect Card
 // =====================================================================
 
+const ENGINE_ICONS: Record<EngineId, React.ReactNode> = {
+  claude: <Terminal className="h-3.5 w-3.5 text-orange-500" />,
+  codex: <Zap className="h-3.5 w-3.5 text-green-500" />,
+  gemini: <Sparkles className="h-3.5 w-3.5 text-blue-500" />,
+  openclaw: <Bot className="h-3.5 w-3.5 text-purple-500" />,
+};
+
+const ENGINE_LABELS: Record<EngineId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  gemini: 'Gemini',
+  openclaw: 'OpenClaw',
+};
+
+const PROVIDER_KEY_MAP: Record<string, EngineId> = {
+  'anthropic': 'claude',
+  'claude': 'claude',
+  'openai': 'codex',
+  'google': 'gemini',
+};
+
+// Fixed hints per engine — always shown regardless of server token_group
+const ENGINE_HINTS: Partial<Record<EngineId, string>> = {
+  claude: 'claude max',
+  openclaw: 'default',
+};
+
+// Priority order: openclaw first, claude code second, then others
+const ENGINE_ORDER: EngineId[] = ['openclaw', 'claude', 'codex', 'gemini'];
+
 const FrogclawCard: React.FC<{
   onToast: (message: string, type: 'success' | 'error' | 'info') => void;
   step?: number;
 }> = ({ onToast, step }) => {
   const { t } = useTranslation();
-  const { user, isAuthenticated, login, logout, tokens, selectedTokenId, selectToken, openclawModels, feishuAppId } = useAuth();
+  const {
+    user, isAuthenticated, login, logout, tokens, systemProviders,
+    engineTokens, selectEngineToken, openclawModels, feishuAppId,
+  } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -430,10 +467,10 @@ const FrogclawCard: React.FC<{
     }
   };
 
-  const handleTokenSelect = async (tokenId: number) => {
+  const handleEngineTokenSelect = async (engine: EngineId, tokenId: number) => {
     setSwitchingToken(true);
     try {
-      await selectToken(tokenId);
+      await selectEngineToken(engine, tokenId);
       onToast(t('home.frogclaw.tokenSwitched', '令牌已切换'), 'success');
     } catch (err: any) {
       onToast(err?.message || t('home.frogclaw.tokenSwitchFailed', '令牌切换失败'), 'error');
@@ -442,11 +479,40 @@ const FrogclawCard: React.FC<{
     }
   };
 
+  // Compute which engines are available, sorted by ENGINE_ORDER (openclaw, claude first)
+  const availableEngines = useMemo(() => {
+    const present = new Set<EngineId>();
+    for (const sp of systemProviders) {
+      const engine = PROVIDER_KEY_MAP[sp.provider_key];
+      if (engine) present.add(engine);
+    }
+    if (openclawModels.length > 0) {
+      present.add('openclaw');
+    }
+    return ENGINE_ORDER.filter(e => present.has(e));
+  }, [systemProviders, openclawModels]);
+
+  const subtitleNode = (
+    <span>
+      {t('home.frogclaw.subtitle', '登录并为每个引擎配置 API 令牌')}
+      {' '}
+      <a
+        href="https://frogclaw.com/console/token"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-0.5 text-primary hover:underline"
+      >
+        {t('home.frogclaw.createToken', '创建令牌')}
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    </span>
+  );
+
   return (
     <FeatureCard
       icon={<Key className="h-5 w-5 text-emerald-500" />}
       title={t('home.frogclaw.title', 'Frogclaw 连接')}
-      subtitle={t('home.frogclaw.subtitle', '登录 Frogclaw 获取 API 令牌和 OpenClaw 配置')}
+      subtitle={subtitleNode}
       step={step}
       completed={isAuthenticated}
       headerRight={
@@ -514,41 +580,82 @@ const FrogclawCard: React.FC<{
             </Button>
           </div>
 
+          {/* Per-engine token configuration — card style */}
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-foreground">
-              {t('home.frogclaw.selectToken', '选择令牌')}
-            </label>
-            {tokens.length > 0 ? (
-              <div className="space-y-1.5">
-                {tokens.map((token) => {
-                  const isSelected = selectedTokenId === token.id;
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-xs font-medium text-foreground">
+                {t('home.frogclaw.tokenConfig', '令牌配置')}
+              </label>
+            </div>
+            {tokens.length > 0 && availableEngines.length > 0 ? (
+              <div className="space-y-2">
+                {availableEngines.map((engine) => {
+                  const hint = ENGINE_HINTS[engine];
+                  const currentTokenId = engineTokens[engine];
+                  const currentToken = tokens.find(t => t.id === currentTokenId);
                   return (
-                    <button
-                      key={token.id}
-                      onClick={() => handleTokenSelect(token.id)}
-                      disabled={switchingToken || isSelected}
-                      className={cn(
-                        'flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors',
-                        isSelected
-                          ? 'border-primary/50 bg-primary/5'
-                          : 'border-border hover:border-border/80 hover:bg-muted/50'
-                      )}
+                    <div
+                      key={engine}
+                      className="rounded-lg border border-border bg-background/50 p-3 transition-colors hover:bg-muted/30"
                     >
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium">{token.name}</div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background">
+                            {ENGINE_ICONS[engine]}
+                          </div>
+                          <div>
+                            <div className="text-xs font-medium leading-tight">{ENGINE_LABELS[engine]}</div>
+                            {currentToken && (
+                              <div className="text-[10px] text-muted-foreground leading-tight">
+                                {currentToken.group && (
+                                  <span className="inline-flex items-center rounded bg-muted px-1 py-0.5 font-mono">
+                                    {currentToken.group}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {hint && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {t('home.frogclaw.recommendedGroup', '建议')}{' '}
+                            <span className="inline-flex items-center rounded bg-blue-500/10 px-1.5 py-0.5 font-medium text-blue-600 dark:text-blue-400">
+                              {hint}
+                            </span>
+                            {' '}{t('home.frogclaw.group', '分组')}
+                          </span>
+                        )}
                       </div>
-                      {isSelected && (
-                        <Check className="h-4 w-4 flex-shrink-0 text-primary" />
-                      )}
-                    </button>
+                      <Select
+                        value={currentTokenId != null ? String(currentTokenId) : undefined}
+                        onValueChange={(val) => handleEngineTokenSelect(engine, Number(val))}
+                        disabled={switchingToken}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder={t('home.frogclaw.selectTokenPlaceholder', '选择令牌...')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tokens.map((token) => {
+                            const isRecommended = hint && token.group === hint;
+                            return (
+                              <SelectItem key={token.id} value={String(token.id)}>
+                                {token.name}
+                                {token.group ? ` [${token.group}]` : ''}
+                                {isRecommended ? ' *' : ''}
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   );
                 })}
               </div>
-            ) : (
+            ) : tokens.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
                 {t('home.frogclaw.noTokens', '暂无可用令牌')}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* OpenClaw Config from Server */}
@@ -762,6 +869,12 @@ export const HomePage: React.FC = () => {
           <DevEnvironmentCard onToast={showToast} step={1} />
           <FrogclawCard onToast={showToast} step={2} />
           <IMChannelCard step={3} />
+        </div>
+
+        {/* Support QQ Group */}
+        <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <span>{t('home.supportQQ', '售后 QQ 群')}:</span>
+          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">703634577</code>
         </div>
       </div>
 

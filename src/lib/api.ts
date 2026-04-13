@@ -691,6 +691,7 @@ export interface FrogclawToken {
   status: number;
   remain_quota: number;
   unlimited_quota: boolean;
+  group: string;
 }
 
 export interface FrogclawSystemProvider {

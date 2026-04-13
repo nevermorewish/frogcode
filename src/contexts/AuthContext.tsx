@@ -7,18 +7,24 @@ export interface OpenClawModelInfo {
   provider: string;
 }
 
+export type EngineId = 'claude' | 'codex' | 'gemini' | 'openclaw';
+export type EngineTokenMap = Partial<Record<EngineId, number>>;
+
 interface AuthContextType {
   user: FrogclawUserData | null;
   isAuthenticated: boolean;
   tokens: FrogclawToken[];
   systemProviders: FrogclawSystemProvider[];
+  engineTokens: EngineTokenMap;
   selectedTokenId: number | null;
   openclawModels: OpenClawModelInfo[];
   feishuAppId: string | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   selectToken: (tokenId: number) => Promise<void>;
+  selectEngineToken: (engine: EngineId, tokenId: number) => Promise<void>;
   refreshProviders: () => Promise<void>;
+  getRecommendedGroup: (engine: EngineId) => string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -26,7 +32,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const AUTH_CRED_KEY = 'frogclaw_auth_cred';
 const AUTH_USER_KEY = 'frogclaw_auth_user';
 const AUTH_TOKENS_KEY = 'frogclaw_tokens';
-const AUTH_SELECTED_TOKEN_KEY = 'frogclaw_selected_token';
+const AUTH_SELECTED_TOKEN_KEY = 'frogclaw_selected_token'; // legacy, for migration
+const AUTH_ENGINE_TOKENS_KEY = 'frogclaw_engine_tokens';
 const AUTH_OPENCLAW_MODELS_KEY = 'frogclaw_openclaw_models';
 const AUTH_FEISHU_APPID_KEY = 'frogclaw_feishu_appid';
 const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
@@ -98,18 +105,68 @@ interface AuthProviderProps {
 }
 
 // Map frogclaw provider_key to local provider type
-const PROVIDER_KEY_MAP: Record<string, 'claude' | 'codex' | 'gemini'> = {
+const PROVIDER_KEY_MAP: Record<string, EngineId> = {
   'anthropic': 'claude',
   'claude': 'claude',
   'openai': 'codex',
   'google': 'gemini',
 };
 
+/** Get the recommended token group for an engine from system providers */
+function getRecommendedGroupFromProviders(
+  engine: EngineId,
+  systemProviders: FrogclawSystemProvider[],
+): string | null {
+  for (const sp of systemProviders) {
+    if (PROVIDER_KEY_MAP[sp.provider_key] === engine && sp.token_group) {
+      return sp.token_group;
+    }
+  }
+  if (engine === 'openclaw') return 'default';
+  return null;
+}
+
+/** Auto-select the best token per engine based on group matching */
+function autoSelectTokens(
+  tokens: FrogclawToken[],
+  systemProviders: FrogclawSystemProvider[],
+  cliProviders: FrogclawCliProvider[],
+): EngineTokenMap {
+  if (tokens.length === 0) return {};
+
+  const result: EngineTokenMap = {};
+  const engines: EngineId[] = ['claude', 'codex', 'gemini'];
+
+  for (const engine of engines) {
+    const hasProvider = systemProviders.some(sp => PROVIDER_KEY_MAP[sp.provider_key] === engine);
+    if (!hasProvider) continue;
+
+    const recommendedGroup = getRecommendedGroupFromProviders(engine, systemProviders);
+    if (recommendedGroup) {
+      const match = tokens.find(t => t.group === recommendedGroup);
+      if (match) {
+        result[engine] = match.id;
+        continue;
+      }
+    }
+    result[engine] = tokens[0].id;
+  }
+
+  // OpenClaw
+  const hasOpenclaw = cliProviders.some(p => p.provider_type === 'openclaw');
+  if (hasOpenclaw) {
+    const match = tokens.find(t => t.group === 'default' || t.group === '');
+    result.openclaw = match?.id ?? tokens[0].id;
+  }
+
+  return result;
+}
+
 async function setupProviders(
   systemProviders: FrogclawSystemProvider[],
-  token: FrogclawToken,
+  allTokens: FrogclawToken[],
+  engineTokens: EngineTokenMap,
 ) {
-  const apiKey = `sk-${token.key}`;
   const FROGCLAW_URL = 'https://frogclaw.com';
   const FROGCLAW_URL_V1 = 'https://frogclaw.com/v1';
 
@@ -117,6 +174,13 @@ async function setupProviders(
     const providerType = PROVIDER_KEY_MAP[sp.provider_key];
     if (!providerType) continue;
 
+    // Look up the token assigned to this engine
+    const tokenId = engineTokens[providerType];
+    if (!tokenId) continue;
+    const token = allTokens.find(t => t.id === tokenId);
+    if (!token) continue;
+
+    const apiKey = `sk-${token.key}`;
     const providerName = `${FROGCLAW_PROVIDER_PREFIX}${sp.name}`;
 
     try {
@@ -310,13 +374,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return localStorage.getItem(AUTH_FEISHU_APPID_KEY) || null;
   });
 
-  const [selectedTokenId, setSelectedTokenId] = useState<number | null>(() => {
-    const saved = localStorage.getItem(AUTH_SELECTED_TOKEN_KEY);
+  const [engineTokens, setEngineTokens] = useState<EngineTokenMap>(() => {
+    // Try new per-engine format first
+    const saved = localStorage.getItem(AUTH_ENGINE_TOKENS_KEY);
     if (saved) {
-      try { return JSON.parse(saved); } catch { return null; }
+      try { return JSON.parse(saved); } catch { /* fall through */ }
     }
-    return null;
+    // Migration: try old single-token format
+    const oldSaved = localStorage.getItem(AUTH_SELECTED_TOKEN_KEY);
+    if (oldSaved) {
+      try {
+        const oldId = JSON.parse(oldSaved);
+        if (typeof oldId === 'number') {
+          const migrated: EngineTokenMap = {
+            claude: oldId, codex: oldId, gemini: oldId, openclaw: oldId,
+          };
+          localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(migrated));
+          localStorage.removeItem(AUTH_SELECTED_TOKEN_KEY);
+          return migrated;
+        }
+      } catch { /* fall through */ }
+    }
+    return {};
   });
+
+  // Derived for backward compatibility
+  const selectedTokenId = engineTokens.claude ?? null;
 
   // On every startup: if credentials exist, re-verify and fetch openclaw config
   useEffect(() => {
@@ -335,6 +418,34 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
           // Always fetch and apply openclaw config on startup
           applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
+
+          // Restore engine tokens from localStorage, validate they still exist
+          const savedET = localStorage.getItem(AUTH_ENGINE_TOKENS_KEY);
+          if (savedET) {
+            try {
+              const parsed: EngineTokenMap = JSON.parse(savedET);
+              // Validate that referenced tokens still exist
+              const validTokenIds = new Set(session.tokens.map(t => t.id));
+              const validated: EngineTokenMap = {};
+              for (const [engine, tokenId] of Object.entries(parsed)) {
+                if (tokenId && validTokenIds.has(tokenId)) {
+                  validated[engine as EngineId] = tokenId;
+                }
+              }
+              // Fill missing engines via auto-select
+              const autoSelected = autoSelectTokens(session.tokens, session.system_providers, session.cli_providers);
+              const merged = { ...autoSelected, ...validated };
+              setEngineTokens(merged);
+              localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(merged));
+              setupProviders(session.system_providers, session.tokens, merged);
+            } catch {
+              // Fallback: auto-select all
+              const autoSelected = autoSelectTokens(session.tokens, session.system_providers, session.cli_providers);
+              setEngineTokens(autoSelected);
+              localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(autoSelected));
+              setupProviders(session.system_providers, session.tokens, autoSelected);
+            }
+          }
         })
         .catch(() => {
           setUser(null);
@@ -343,6 +454,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           localStorage.removeItem(AUTH_USER_KEY);
           localStorage.removeItem(AUTH_TOKENS_KEY);
           localStorage.removeItem(AUTH_SELECTED_TOKEN_KEY);
+          localStorage.removeItem(AUTH_ENGINE_TOKENS_KEY);
           localStorage.removeItem(AUTH_OPENCLAW_MODELS_KEY);
           localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
         });
@@ -365,25 +477,57 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     // Fetch and apply openclaw config
     applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
 
-    // Auto-setup providers with first token
+    // Auto-setup providers with best token per engine
     if (session.tokens.length > 0) {
-      const defaultToken = session.tokens[0];
-      setSelectedTokenId(defaultToken.id);
-      localStorage.setItem(AUTH_SELECTED_TOKEN_KEY, JSON.stringify(defaultToken.id));
-      await setupProviders(session.system_providers, defaultToken);
+      const autoTokens = autoSelectTokens(
+        session.tokens, session.system_providers, session.cli_providers,
+      );
+      setEngineTokens(autoTokens);
+      localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(autoTokens));
+      await setupProviders(session.system_providers, session.tokens, autoTokens);
     }
   }, []);
 
+  /** Switch a single engine's token */
+  const selectEngineToken = useCallback(async (engine: EngineId, tokenId: number) => {
+    const token = tokens.find(t => t.id === tokenId);
+    if (!token) return;
+
+    const updated = { ...engineTokens, [engine]: tokenId };
+    setEngineTokens(updated);
+    localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(updated));
+
+    // OpenClaw token is informational only (config comes from server)
+    if (engine === 'openclaw') return;
+
+    // Re-setup only the affected engine's providers
+    const relevantProviders = systemProviders.filter(sp =>
+      PROVIDER_KEY_MAP[sp.provider_key] === engine,
+    );
+    if (relevantProviders.length > 0) {
+      await setupProviders(relevantProviders, tokens, updated);
+    }
+  }, [tokens, systemProviders, engineTokens]);
+
+  /** Switch ALL engines to the same token (backward compat, used by sidebar) */
   const selectToken = useCallback(async (tokenId: number) => {
     const token = tokens.find(t => t.id === tokenId);
     if (!token) return;
 
-    setSelectedTokenId(tokenId);
-    localStorage.setItem(AUTH_SELECTED_TOKEN_KEY, JSON.stringify(tokenId));
+    const updated: EngineTokenMap = {};
+    // Assign to all engines that have providers
+    for (const sp of systemProviders) {
+      const engine = PROVIDER_KEY_MAP[sp.provider_key];
+      if (engine) updated[engine] = tokenId;
+    }
+    if (openclawModels.length > 0) {
+      updated.openclaw = tokenId;
+    }
 
-    // Re-setup all providers with new token
-    await setupProviders(systemProviders, token);
-  }, [tokens, systemProviders]);
+    setEngineTokens(updated);
+    localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(updated));
+    await setupProviders(systemProviders, tokens, updated);
+  }, [tokens, systemProviders, openclawModels]);
 
   const refreshProviders = useCallback(async () => {
     const cred = localStorage.getItem(AUTH_CRED_KEY);
@@ -407,16 +551,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(null);
     setTokens([]);
     setSystemProviders([]);
-    setSelectedTokenId(null);
+    setEngineTokens({});
     setOpenclawModels([]);
     setFeishuAppId(null);
     localStorage.removeItem(AUTH_CRED_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
     localStorage.removeItem(AUTH_TOKENS_KEY);
     localStorage.removeItem(AUTH_SELECTED_TOKEN_KEY);
+    localStorage.removeItem(AUTH_ENGINE_TOKENS_KEY);
     localStorage.removeItem(AUTH_OPENCLAW_MODELS_KEY);
     localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
   }, []);
+
+  const getRecommendedGroup = useCallback((engine: EngineId) => {
+    return getRecommendedGroupFromProviders(engine, systemProviders);
+  }, [systemProviders]);
 
   return (
     <AuthContext.Provider value={{
@@ -424,13 +573,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       isAuthenticated: !!user,
       tokens,
       systemProviders,
+      engineTokens,
       selectedTokenId,
       openclawModels,
       feishuAppId,
       login,
       logout,
       selectToken,
+      selectEngineToken,
       refreshProviders,
+      getRecommendedGroup,
     }}>
       {children}
     </AuthContext.Provider>

@@ -1283,6 +1283,7 @@
     "installing": "安裝中",
     "installAll": "一鍵安裝",
     "dashboardSubtitle": "快速存取與設定常用功能",
+    "supportQQ": "售後 QQ 群",
     "devEnv": {
       "title": "開發環境檢測",
       "subtitle": "檢測必備開發工具的安裝情況",
@@ -1290,7 +1291,7 @@
     },
     "frogclaw": {
       "title": "Frogclaw 連線",
-      "subtitle": "登入並選擇 API 令牌",
+      "subtitle": "登入並為每個引擎配置 API 令牌",
       "connected": "已連線",
       "username": "使用者名稱",
       "usernamePlaceholder": "請輸入使用者名稱",
@@ -1302,9 +1303,15 @@
       "loggedInAs": "目前使用者",
       "logout": "登出",
       "selectToken": "選擇令牌",
+      "tokenConfig": "令牌配置",
+      "selectTokenPlaceholder": "選擇令牌...",
       "noTokens": "暫無可用令牌",
       "tokenSwitched": "令牌已切換",
-      "tokenSwitchFailed": "令牌切換失敗"
+      "tokenSwitchFailed": "令牌切換失敗",
+      "recommendedGroup": "建議",
+      "group": "分組",
+      "createToken": "建立令牌",
+      "autoConfigured": "已根據推薦分組為每個引擎自動配置令牌。"
     },
     "imChannel": {
       "title": "IM 通道設定",

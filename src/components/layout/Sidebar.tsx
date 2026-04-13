@@ -300,7 +300,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         {tokens.map((token) => (
                           <option key={token.id} value={token.id}>
-                            {token.name}
+                            {token.name}{token.group ? ` [${token.group}]` : ''}
                           </option>
                         ))}
                       </select>

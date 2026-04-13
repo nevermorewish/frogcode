@@ -1259,6 +1259,7 @@
     "installing": "Installing",
     "installAll": "Install All",
     "dashboardSubtitle": "Quick access to common features and settings",
+    "supportQQ": "Support QQ Group",
     "devEnv": {
       "title": "Development Environment",
       "subtitle": "Check installation of essential dev tools",
@@ -1266,7 +1267,7 @@
     },
     "frogclaw": {
       "title": "Frogclaw Connection",
-      "subtitle": "Sign in and select an API token",
+      "subtitle": "Sign in and configure API tokens per engine",
       "connected": "Connected",
       "username": "Username",
       "usernamePlaceholder": "Enter username",
@@ -1278,9 +1279,15 @@
       "loggedInAs": "Current user",
       "logout": "Sign Out",
       "selectToken": "Select Token",
+      "tokenConfig": "Token Configuration",
+      "selectTokenPlaceholder": "Select a token...",
       "noTokens": "No tokens available",
       "tokenSwitched": "Token switched",
-      "tokenSwitchFailed": "Failed to switch token"
+      "tokenSwitchFailed": "Failed to switch token",
+      "recommendedGroup": "Recommended",
+      "group": "group",
+      "createToken": "Create Token",
+      "autoConfigured": "Tokens have been auto-configured for each engine based on recommended groups."
     },
     "imChannel": {
       "title": "IM Channel Settings",

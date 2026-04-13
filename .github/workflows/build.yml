@@ -256,23 +256,23 @@ jobs:
           {
             "version": "$VERSION",
             "pub_date": "$PUB_DATE",
-            "notes": "See the full changelog at https://github.com/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME",
+            "notes": "Frog Code ${VERSION} released. Download at https://frogclaw.com/downloads/${VERSION}/",
             "platforms": {
               "darwin-aarch64": {
                 "signature": "$DARWIN_AARCH64_SIGNATURE",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/frog-code_${VERSION}_aarch64.app.tar.gz"
+                "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_aarch64.app.tar.gz"
               },
               "darwin-x86_64": {
                 "signature": "$DARWIN_X64_SIGNATURE",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/frog-code_${VERSION}_x64.app.tar.gz"
+                "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_x64.app.tar.gz"
               },
               "linux-x86_64": {
                 "signature": "$LINUX_SIGNATURE",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/frog-code_${VERSION}_amd64.AppImage"
+                "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_amd64.AppImage"
               },
               "windows-x86_64": {
                 "signature": "$WINDOWS_NSIS_SIGNATURE",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/frog-code_${VERSION}_x64-setup.exe"
+                "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_x64-setup.exe"
               }
             }
           }

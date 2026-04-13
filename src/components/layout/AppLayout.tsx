@@ -1,4 +1,4 @@
-import React, { ReactNode, useState } from 'react';
+import React, { ReactNode, useState, useEffect, useRef } from 'react';
 import { Sidebar } from "@/components/layout/Sidebar";
 import { useNavigation } from '@/contexts/NavigationContext';
 import { useUpdate } from '@/contexts/UpdateContext';
@@ -12,9 +12,18 @@ interface AppLayoutProps {
 
 export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const { currentView, navigateTo } = useNavigation();
-  const { checkUpdate } = useUpdate();
+  const { checkUpdate, hasUpdate, isDismissed } = useUpdate();
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showAboutDialog, setShowAboutDialog] = useState(false);
+  const hasAutoShown = useRef(false);
+
+  // 启动时自动弹出更新对话框（每次启动仅弹一次，且未被用户忽略过该版本）
+  useEffect(() => {
+    if (hasUpdate && !isDismissed && !hasAutoShown.current) {
+      hasAutoShown.current = true;
+      setShowUpdateDialog(true);
+    }
+  }, [hasUpdate, isDismissed]);
 
   const handleCheckUpdate = async () => {
     setShowAboutDialog(false);

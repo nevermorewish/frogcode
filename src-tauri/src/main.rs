@@ -181,6 +181,8 @@ use commands::gemini::{
 };
 use commands::git_stats::{get_git_diff_stats, get_session_code_changes};
 use process::ProcessRegistryState;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_window_state::Builder as WindowStatePlugin;
 
@@ -232,6 +234,68 @@ fn main() {
 
             // Initialize platform bridge state
             app.manage(PlatformBridgeState::default());
+
+            // System tray: minimize to tray on close, quit via tray menu
+            let show_hide = MenuItemBuilder::with_id("show_hide", "Show/Hide").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .item(&show_hide)
+                .separator()
+                .item(&quit)
+                .build()?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&tray_menu)
+                .tooltip("Frog Code")
+                .on_menu_event(move |app, event| {
+                    match event.id().as_ref() {
+                        "show_hide" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                if win.is_visible().unwrap_or(false) {
+                                    let _ = win.hide();
+                                } else {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
+                            }
+                        }
+                        "quit" => {
+                            // Kill sidecar synchronously before exit
+                            app.state::<PlatformBridgeState>().kill_child_sync();
+                            // Close all session windows
+                            let windows_to_close: Vec<String> = app
+                                .webview_windows()
+                                .keys()
+                                .filter(|label| label.starts_with("session-window-"))
+                                .cloned()
+                                .collect();
+                            for label in windows_to_close {
+                                if let Some(win) = app.get_webview_window(&label) {
+                                    let _ = win.close();
+                                }
+                            }
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
 
             // Auto-start platform sidecar on every boot so the OpenClaw Sessions
             // view (and any future agent-managed feature) works without needing
@@ -313,41 +377,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Handle main window close - close all session windows
-            if let WindowEvent::CloseRequested { .. } = event {
+            if let WindowEvent::CloseRequested { api, .. } = event {
                 let window_label = window.label();
-
-                // If main window is closing, close all session windows
                 if window_label == "main" {
-                    log::info!("[Window] Main window closing, closing all session windows");
-
-                    // Kill platform bridge sidecar SYNCHRONOUSLY before app exits.
-                    // Cannot use async spawn here — the Tokio runtime may be
-                    // dropped before the task completes, leaving the sidecar as
-                    // an orphan that keeps its Feishu WebSocket alive.
-                    window.app_handle().state::<PlatformBridgeState>().kill_child_sync();
-
-                    let app = window.app_handle();
-                    let windows_to_close: Vec<String> = app
-                        .webview_windows()
-                        .keys()
-                        .filter(|label| label.starts_with("session-window-"))
-                        .cloned()
-                        .collect();
-
-                    for label in windows_to_close {
-                        if let Some(win) = app.get_webview_window(&label) {
-                            log::info!("[Window] Closing session window: {}", label);
-                            if let Err(e) = win.close() {
-                                log::error!(
-                                    "[Window] Failed to close session window {}: {}",
-                                    label,
-                                    e
-                                );
-                            }
-                        }
-                    }
+                    // Hide to system tray instead of quitting.
+                    // The tray "Quit" menu handles real exit + sidecar cleanup.
+                    api.prevent_close();
+                    let _ = window.hide();
+                    log::info!("[Window] Main window hidden to tray");
                 }
+                // Session windows still close normally
             }
         })
         .invoke_handler(tauri::generate_handler![

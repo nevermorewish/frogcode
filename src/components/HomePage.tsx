@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Toast, ToastContainer } from '@/components/ui/toast';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -428,12 +428,6 @@ const PROVIDER_KEY_MAP: Record<string, EngineId> = {
   'google': 'gemini',
 };
 
-// Fixed hints per engine — always shown regardless of server token_group
-const ENGINE_HINTS: Partial<Record<EngineId, string>> = {
-  claude: 'claude max',
-  openclaw: 'default',
-};
-
 // Priority order: openclaw first, claude code second, then others
 const ENGINE_ORDER: EngineId[] = ['openclaw', 'claude', 'codex', 'gemini'];
 
@@ -582,69 +576,79 @@ const FrogclawCard: React.FC<{
 
           {/* Per-engine token configuration — card style */}
           <div>
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2">
               <label className="text-xs font-medium text-foreground">
                 {t('home.frogclaw.tokenConfig', '令牌配置')}
               </label>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                {t('home.frogclaw.tokenConfigTip', '建议 Claude Code 使用 claude max 分组，OpenClaw 使用 default 分组')}
+              </p>
             </div>
             {tokens.length > 0 && availableEngines.length > 0 ? (
-              <div className="space-y-2">
+              <div className="grid grid-cols-4 gap-2">
                 {availableEngines.map((engine) => {
-                  const hint = ENGINE_HINTS[engine];
                   const currentTokenId = engineTokens[engine];
-                  const currentToken = tokens.find(t => t.id === currentTokenId);
                   return (
                     <div
                       key={engine}
-                      className="rounded-lg border border-border bg-background/50 p-3 transition-colors hover:bg-muted/30"
+                      className="rounded-xl border border-border bg-gradient-to-br from-background/80 to-muted/20 p-2.5 shadow-sm transition-all hover:shadow-md hover:border-primary/20"
                     >
-                      <div className="mb-2 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background">
-                            {ENGINE_ICONS[engine]}
-                          </div>
-                          <div>
-                            <div className="text-xs font-medium leading-tight">{ENGINE_LABELS[engine]}</div>
-                            {currentToken && (
-                              <div className="text-[10px] text-muted-foreground leading-tight">
-                                {currentToken.group && (
-                                  <span className="inline-flex items-center rounded bg-muted px-1 py-0.5 font-mono">
-                                    {currentToken.group}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                      <div className="mb-2 flex items-center gap-2">
+                        <div className={cn(
+                          "flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg border shadow-sm",
+                          engine === 'claude' ? 'bg-orange-500/10 border-orange-500/20' : '',
+                          engine === 'codex' ? 'bg-green-500/10 border-green-500/20' : '',
+                          engine === 'gemini' ? 'bg-blue-500/10 border-blue-500/20' : '',
+                          engine === 'openclaw' ? 'bg-purple-500/10 border-purple-500/20' : ''
+                        )}>
+                          {ENGINE_ICONS[engine]}
                         </div>
-                        {hint && (
-                          <span className="text-[10px] text-muted-foreground">
-                            {t('home.frogclaw.recommendedGroup', '建议')}{' '}
-                            <span className="inline-flex items-center rounded bg-blue-500/10 px-1.5 py-0.5 font-medium text-blue-600 dark:text-blue-400">
-                              {hint}
-                            </span>
-                            {' '}{t('home.frogclaw.group', '分组')}
-                          </span>
-                        )}
+                        <div className="text-xs font-semibold leading-tight truncate">{ENGINE_LABELS[engine]}</div>
                       </div>
                       <Select
                         value={currentTokenId != null ? String(currentTokenId) : undefined}
                         onValueChange={(val) => handleEngineTokenSelect(engine, Number(val))}
                         disabled={switchingToken}
                       >
-                        <SelectTrigger className="h-8 text-xs">
+                        <SelectTrigger className="h-8 w-full bg-background/50 transition-colors focus:ring-1 focus:ring-primary shadow-sm text-xs">
                           <SelectValue placeholder={t('home.frogclaw.selectTokenPlaceholder', '选择令牌...')} />
                         </SelectTrigger>
-                        <SelectContent>
-                          {tokens.map((token) => {
-                            const isRecommended = hint && token.group === hint;
-                            return (
-                              <SelectItem key={token.id} value={String(token.id)}>
-                                {token.name}
-                                {token.group ? ` [${token.group}]` : ''}
-                                {isRecommended ? ' *' : ''}
-                              </SelectItem>
-                            );
-                          })}
+                        <SelectContent className="w-[--radix-select-trigger-width] min-w-[200px]">
+                          {(() => {
+                            const userGroup = user?.group || 'default';
+                            const grouped = new Map<string, typeof tokens>();
+                            for (const token of tokens) {
+                              const g = token.group || userGroup;
+                              if (!grouped.has(g)) grouped.set(g, []);
+                              grouped.get(g)!.push(token);
+                            }
+                            const groups = Array.from(grouped.entries());
+                            // If all tokens are in the same group, render flat list
+                            const renderTokenItem = (token: typeof tokens[0]) => {
+                              const effectiveGroup = token.group || userGroup;
+                              return (
+                                <SelectItem key={token.id} value={String(token.id)} className="w-full">
+                                  <div className="flex flex-row items-center justify-between w-full h-full gap-2">
+                                    <span className="font-medium truncate">{token.name}</span>
+                                    <span className="inline-flex flex-shrink-0 items-center rounded bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground border border-border ml-auto">
+                                      {effectiveGroup}
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              );
+                            };
+                            if (groups.length <= 1) {
+                              return tokens.map(renderTokenItem);
+                            }
+                            return groups.map(([group, groupTokens]) => (
+                              <SelectGroup key={group}>
+                                <SelectLabel className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-2">
+                                  {group}
+                                </SelectLabel>
+                                {groupTokens.map(renderTokenItem)}
+                              </SelectGroup>
+                            ));
+                          })()}
                         </SelectContent>
                       </Select>
                     </div>

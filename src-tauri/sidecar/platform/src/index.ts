@@ -1,30 +1,23 @@
 #!/usr/bin/env node
 /**
- * Frogcode Platform Sidecar
+ * Frogcode Platform Sidecar — Multi-Bot Architecture
  *
- * Bridges IM platforms (currently Feishu) to pluggable CLI backends via an
+ * Bridges IM platforms (Feishu) to pluggable CLI backends via an
  * Agent adapter layer (ClaudeCodeAgent / OpenClawAgent / ...).
  *
- * Architecture (mirrors cc-connect):
- *   Feishu WS  →  AgentManager.handle()  →  Agent.startSession().send()
- *                                         →  AgentEvent stream
- *                                         →  CardRenderer  →  Feishu API
+ * Each configured Feishu bot gets its own independent:
+ *   - lark.Client (API calls)
+ *   - lark.WSClient (event subscription)
+ *   - AgentManager (session routing)
+ *   - CardRenderer (Feishu card updates)
  *
- * Rust parent manages lifecycle only (spawn/kill, config r/w, SSE relay).
+ * This ensures Bot A's events are always replied to via Bot A's
+ * API client, eliminating 230002 "Bot not in chat" errors caused
+ * by credential mismatch.
  */
 
 // ============================================================================
 // CRITICAL: redirect console.{log,info,warn,debug} to stderr BEFORE any import.
-//
-// Reason: stdout is piped to the Rust parent process and only used for the
-// initial "FROGCODE_PLATFORM_READY port=N" handshake. After the Rust side
-// reads that line it drops the pipe reader. Any subsequent stdout write
-// (e.g. from the Feishu SDK's internal `console.info` logger) causes an
-// EPIPE error that crashes the sidecar.
-//
-// By redirecting console to stderr, all SDK logging lands in the log file
-// alongside our own `log()` output. stdout is only used by the explicit
-// `process.stdout.write(FROGCODE_PLATFORM_READY ...)` call below.
 // ============================================================================
 import * as path from 'node:path';
 const _sdkLogPath = path.join(
@@ -69,9 +62,7 @@ function parseArgs(argv: string[]) {
 const args = parseArgs(process.argv);
 
 // ============================================================================
-// Logger — dual-write: stderr (captured by Rust) + direct file append
-// On Windows, stderr-to-file can buffer indefinitely after the initial writes,
-// so we also append directly to the log file for reliability.
+// Logger
 // ============================================================================
 const _logFilePath = path.join(
   process.env.HOME || process.env.USERPROFILE || '',
@@ -92,75 +83,64 @@ const bus = new EventEmitter();
 bus.setMaxListeners(50);
 
 // ============================================================================
-// Config
+// IM Channel Config (read from im-channels.json)
 // ============================================================================
-interface PlatformConfig {
+interface IMChannelConfig {
+  id: string;
+  platform: string;
   appId: string;
   appSecret: string;
+  label: string;
+  assignment: AgentType | 'none';
+}
+
+// Platform config (read from platform-config.json) — for projectPath only
+interface PlatformConfig {
   projectPath: string;
   enabled: boolean;
   agentType: AgentType;
+  openclawAutoStart?: boolean;
 }
 
 const startedAt = Date.now();
-let currentConfig: PlatformConfig | null = null;
-let feishuStatus: 'stopped' | 'starting' | 'running' | 'error' = 'stopped';
-let feishuError: string | null = null;
-let larkClient: lark.Client | null = null;
-let wsClient: lark.WSClient | null = null;
-let botOpenId: string | null = null;
+let platformConfig: PlatformConfig | null = null;
 
-// Agent layer (one agent instance, one manager per sidecar)
-let agentManager: AgentManager | null = null;
-let cardRenderer: CardRenderer = new CardRenderer({ larkClient: null });
-
-function loadConfig(configPath: string): PlatformConfig | null {
+function loadPlatformConfig(configPath: string): PlatformConfig | null {
   if (!configPath) return null;
   try {
     if (!fs.existsSync(configPath)) return null;
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const cfg = JSON.parse(raw);
-    // agentType only controls which backend handles the IM (Feishu) bridge.
-    // The OpenClaw Sessions view + /openclaw/* endpoints go through a
-    // module-level singleton OpenClawAgent so they're available regardless.
-    const agentType: AgentType = (cfg.agentType as AgentType) || 'claudecode';
-    // Feishu credentials live under each agent's per-agent config file as of
-    // v5.29 — pull them from agents/<type>.json's `feishu` sub-object. Fall
-    // back to root appId/appSecret (legacy layout) if the agent file has none,
-    // so old installs still work until the next write migrates them.
-    const agentCfg = loadAgentConfig(agentType) || {};
-    const agentFeishu = (agentCfg.feishu as { appId?: string; appSecret?: string } | undefined) || {};
+    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     return {
-      appId:
-        agentFeishu.appId ||
-        cfg.appId ||
-        cfg.app_id ||
-        '',
-      appSecret:
-        agentFeishu.appSecret ||
-        cfg.appSecret ||
-        cfg.app_secret ||
-        '',
-      projectPath: cfg.projectPath || cfg.project_path || defaultConfig().projectPath,
+      projectPath: cfg.projectPath || cfg.project_path || defaultProjectPath(),
       enabled: !!cfg.enabled,
-      agentType,
+      agentType: (cfg.agentType as AgentType) || 'claudecode',
+      openclawAutoStart: !!cfg.openclawAutoStart,
     };
   } catch (e: any) {
-    log('warn', 'Failed to load config:', e.message);
+    log('warn', 'Failed to load platform config:', e.message);
     return null;
   }
 }
 
-/** Default config synthesized when no platform-config.json exists on disk. */
-function defaultConfig(): PlatformConfig {
+function defaultProjectPath(): string {
   const home = process.env.HOME || process.env.USERPROFILE || '';
-  return {
-    appId: '',
-    appSecret: '',
-    projectPath: home ? path.join(home, '.openclaw', 'workspace') : '',
-    enabled: false,
-    agentType: 'claudecode',
-  };
+  return home ? path.join(home, '.openclaw', 'workspace') : '';
+}
+
+function loadChannelsFromDisk(): IMChannelConfig[] {
+  const p = path.join(
+    process.env.HOME || process.env.USERPROFILE || '',
+    '.frogcode',
+    'im-channels.json',
+  );
+  try {
+    if (!fs.existsSync(p)) return [];
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return Array.isArray(data.channels) ? data.channels : [];
+  } catch (e: any) {
+    log('warn', 'Failed to load im-channels.json:', e.message);
+    return [];
+  }
 }
 
 // ============================================================================
@@ -187,14 +167,7 @@ function loadAgentConfig(agentType: AgentType): any {
 // Agent initialization
 // ============================================================================
 
-/**
- * Module-level OpenClawAgent singleton. Exists regardless of the active
- * IM-bridge agentType so the OpenClaw Sessions view, /openclaw/start,
- * /openclaw/stop, /openclaw/restart, /openclaw/status endpoints are
- * always reachable — users can run openclaw and claudecode side by side.
- *
- * Lazy-initialized on first access so we don't touch disk at import time.
- */
+/** Module-level OpenClawAgent singleton — shared across all bots assigned to openclaw. */
 let openclawAgent: OpenClawAgent | null = null;
 function getOpenClawAgent(): OpenClawAgent {
   if (!openclawAgent) {
@@ -208,8 +181,6 @@ function createAgent(type: AgentType): Agent {
     case 'claudecode':
       return new ClaudeCodeAgent(loadAgentConfig('claudecode'));
     case 'openclaw':
-      // Reuse the singleton so the IM bridge and /openclaw/* endpoints
-      // operate on the same underlying gateway process.
       return getOpenClawAgent();
     default: {
       const _exhaustive: never = type;
@@ -218,29 +189,25 @@ function createAgent(type: AgentType): Agent {
   }
 }
 
-async function initAgentManager(type: AgentType): Promise<void> {
-  if (agentManager) {
-    // Detach: close sessions and clean up listeners, but DON'T stop the
-    // underlying agent. This keeps the OpenClaw gateway alive when the
-    // user switches the IM channel assignment between Claude Code and
-    // OpenClaw — "openclaw 用户没点停止，就不能关闭".
-    await agentManager.detach();
-    agentManager = null;
-  }
-  const agent = createAgent(type);
-  agentManager = new AgentManager(agent);
-  // Wire agent events → card renderer
-  agentManager.onEvent((_key, evt) => {
-    // sessionKey format: "feishu:chatId:userId" — extract chatId for the renderer
-    const [, chatId] = _key.split(':');
-    cardRenderer.processEvent(chatId, evt).catch((e) =>
-      log('error', 'cardRenderer.processEvent:', e.message),
-    );
-  });
-  log('info', `AgentManager initialized with agent=${type}`);
-  // Note: openclaw gateway is NOT auto-started. User must click Start
-  // from the OpenClaw Sessions page, or first Feishu message triggers it.
+// ============================================================================
+// BotConnection — one per Feishu bot
+// ============================================================================
+
+interface BotConnection {
+  appId: string;
+  appSecret: string;
+  assignment: AgentType | 'none';
+  label: string;
+  larkClient: lark.Client;
+  wsClient: lark.WSClient | null;
+  botOpenId: string | null;
+  agentManager: AgentManager | null;
+  cardRenderer: CardRenderer;
+  status: 'stopped' | 'starting' | 'running' | 'error';
+  error: string | null;
 }
+
+const bots = new Map<string, BotConnection>();
 
 // ============================================================================
 // Media temp dir
@@ -249,30 +216,35 @@ const tmpDir = path.join(process.env.TEMP || process.env.TMPDIR || '/tmp', 'frog
 fs.mkdirSync(tmpDir, { recursive: true });
 
 // ============================================================================
-// Feishu API helpers (non-card)
+// Feishu API helpers (per-bot)
 // ============================================================================
 
-// Plain-text reply (for slash command ACKs)
-async function sendText(chatId: string, text: string): Promise<void> {
-  if (!larkClient) return;
+async function sendText(client: lark.Client, chatId: string, text: string, userId?: string): Promise<void> {
+  const content = JSON.stringify({ text });
   try {
-    await larkClient.im.v1.message.create({
+    await client.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
-      data: {
-        receive_id: chatId,
-        content: JSON.stringify({ text }),
-        msg_type: 'text',
-      },
+      data: { receive_id: chatId, content, msg_type: 'text' },
     });
+    return;
   } catch (err: any) {
-    log('error', 'sendText:', err.message);
+    log('warn', `sendText chat_id failed: ${err.message?.slice(0, 120)}`);
+  }
+  if (userId) {
+    try {
+      await client.im.v1.message.create({
+        params: { receive_id_type: 'open_id' },
+        data: { receive_id: userId, content, msg_type: 'text' },
+      });
+    } catch (err: any) {
+      log('error', `sendText open_id fallback failed: ${err.message?.slice(0, 120)}`);
+    }
   }
 }
 
-async function downloadFeishuImage(messageId: string, imageKey: string): Promise<string | null> {
-  if (!larkClient) return null;
+async function downloadFeishuImage(client: lark.Client, messageId: string, imageKey: string): Promise<string | null> {
   try {
-    const resp = await (larkClient as any).im.v1.messageResource.get({
+    const resp = await (client as any).im.v1.messageResource.get({
       path: { message_id: messageId, file_key: imageKey },
       params: { type: 'image' },
     });
@@ -288,13 +260,13 @@ async function downloadFeishuImage(messageId: string, imageKey: string): Promise
 }
 
 async function downloadFeishuFile(
+  client: lark.Client,
   messageId: string,
   fileKey: string,
   fileName: string,
 ): Promise<string | null> {
-  if (!larkClient) return null;
   try {
-    const resp = await (larkClient as any).im.v1.messageResource.get({
+    const resp = await (client as any).im.v1.messageResource.get({
       path: { message_id: messageId, file_key: fileKey },
       params: { type: 'file' },
     });
@@ -341,16 +313,49 @@ function extractTextFromPost(content: Record<string, unknown>): string {
 }
 
 // ============================================================================
-// Feishu Event Handler
+// Notification Cards (switch / unassign)
+// ============================================================================
+
+function buildNotificationCard(title: string, color: string, body: string): string {
+  return JSON.stringify({
+    config: { wide_screen_mode: true },
+    header: {
+      template: color,
+      title: { content: title, tag: 'plain_text' },
+    },
+    elements: [{ tag: 'markdown', content: body }],
+  });
+}
+
+async function sendNotificationCard(client: lark.Client, chatId: string, cardJson: string, userId?: string): Promise<void> {
+  // Try chat_id first, then open_id fallback
+  try {
+    await client.im.v1.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: { receive_id: chatId, content: cardJson, msg_type: 'interactive' },
+    });
+    return;
+  } catch {}
+  if (userId) {
+    try {
+      await client.im.v1.message.create({
+        params: { receive_id_type: 'open_id' },
+        data: { receive_id: userId, content: cardJson, msg_type: 'interactive' },
+      });
+    } catch {}
+  }
+}
+
+// ============================================================================
+// Feishu Event Handler — per-bot
 // ============================================================================
 
 /** Simple TTL-based dedup cache to ignore duplicate Feishu event deliveries. */
 const recentMessageIds = new Map<string, number>();
-const DEDUP_TTL_MS = 30_000; // 30 seconds
+const DEDUP_TTL_MS = 30_000;
 
 function isDuplicateMessage(messageId: string): boolean {
   const now = Date.now();
-  // Prune expired entries periodically
   if (recentMessageIds.size > 200) {
     for (const [id, ts] of recentMessageIds) {
       if (now - ts > DEDUP_TTL_MS) recentMessageIds.delete(id);
@@ -361,9 +366,9 @@ function isDuplicateMessage(messageId: string): boolean {
   return false;
 }
 
-function createEventDispatcher(): lark.EventDispatcher {
+function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
   const dispatcher = new lark.EventDispatcher({});
-  log('info', 'Registering feishu event handler: im.message.receive_v1');
+  log('info', `[${bot.appId.slice(0, 12)}] Registering event handler`);
 
   dispatcher.register({
     'im.message.receive_v1': async (data: any) => {
@@ -376,16 +381,11 @@ function createEventDispatcher(): lark.EventDispatcher {
         const messageId = message?.message_id;
         const userId = sender?.sender_id?.open_id;
 
-        // ── EARLY DIAGNOSTIC LOG ────────────────────────────────────────
-        // Log BEFORE any filter runs so users can tell the difference
-        // between "event not received" (log silent) and "event filtered
-        // out" (log shows event + reason).
         log(
           'event',
-          `RECV im.message.receive_v1 chat=${chatType}/${chatId?.slice(0, 12)} user=${userId?.slice(0, 12)} msg=${messageId?.slice(0, 12)} type=${msgType}`,
+          `[${bot.appId.slice(0, 12)}] RECV chat=${chatType}/${chatId?.slice(0, 12)} user=${userId?.slice(0, 12)} msg=${messageId?.slice(0, 12)} type=${msgType}`,
         );
 
-        // Deduplicate: Feishu may deliver the same event multiple times
         if (messageId && isDuplicateMessage(messageId)) {
           log('event', `DROP: duplicate messageId=${messageId.slice(0, 12)}`);
           return;
@@ -401,28 +401,18 @@ function createEventDispatcher(): lark.EventDispatcher {
           return;
         }
 
-        // In group chats, only respond when @mentioned.
-        // botOpenId may be null if botInfo.get() failed at connect time —
-        // in that case we fall back to "any mention counts" so users can
-        // still interact with the bot. A message with zero mentions in a
-        // group is silently dropped (by design).
+        // In group chats, only respond when @mentioned
         if (chatType === 'group') {
           const mentions = message.mentions;
           if (!Array.isArray(mentions) || mentions.length === 0) {
-            log(
-              'event',
-              `DROP: group chat, no @mentions (bot requires @mention in groups)`,
-            );
+            log('event', `DROP: group chat, no @mentions`);
             return;
           }
           const mentioned = mentions.some(
-            (m: any) => !botOpenId || m.id?.open_id === botOpenId,
+            (m: any) => !bot.botOpenId || m.id?.open_id === bot.botOpenId,
           );
           if (!mentioned) {
-            log(
-              'event',
-              `DROP: group chat, bot not @mentioned (botOpenId=${botOpenId ?? 'unknown'})`,
-            );
+            log('event', `DROP: group chat, bot not @mentioned`);
             return;
           }
         }
@@ -436,33 +426,25 @@ function createEventDispatcher(): lark.EventDispatcher {
           try {
             const content = JSON.parse(message.content);
             imageKey = content.image_key;
-          } catch {
-            return;
-          }
+          } catch { return; }
           text = '请分析这张图片';
         } else if (msgType === 'file') {
           try {
             const content = JSON.parse(message.content);
             fileKey = content.file_key;
             fileName = content.file_name;
-          } catch {
-            return;
-          }
+          } catch { return; }
           text = `请分析这个文件: ${fileName}`;
         } else if (msgType === 'post') {
           try {
             const content = JSON.parse(message.content);
             text = extractTextFromPost(content);
-          } catch {
-            return;
-          }
+          } catch { return; }
         } else {
           try {
             const content = JSON.parse(message.content);
             text = content.text || '';
-          } catch {
-            return;
-          }
+          } catch { return; }
         }
 
         // Strip @mention tags
@@ -471,103 +453,100 @@ function createEventDispatcher(): lark.EventDispatcher {
 
         log(
           'info',
-          `[${chatType}] ${userId}: ${text.slice(0, 80)}${imageKey ? ' +img' : ''}${fileKey ? ' +file' : ''}`,
+          `[${bot.appId.slice(0, 12)}] [${chatType}] ${userId.slice(0, 12)}: ${text.slice(0, 80)}${imageKey ? ' +img' : ''}${fileKey ? ' +file' : ''}`,
         );
 
+        // ─── Unassigned bot: reply with "未分配" message ─────────────
+        if (bot.assignment === 'none' || !bot.agentManager) {
+          log('info', `[${bot.appId.slice(0, 12)}] bot unassigned, sending 未分配 reply`);
+          await sendText(bot.larkClient, chatId, '该机器人还未分配CLI后端，请在 Frog Code 应用中为此通道分配 Claude Code 或 OpenClaw。', userId);
+          return;
+        }
+
+        // Must match makeSessionKey(platform, channelId, userId) format
         const sessionKey = `feishu:${chatId}:${userId}`;
 
-        // ─── Slash commands ───────────────────────────────────────────────
+        // ─── Slash commands ──────────────────────────────────────────
         const lower = text.toLowerCase();
         if (lower === '/new' || lower === '/reset') {
-          if (agentManager) await agentManager.reset(sessionKey);
-          await sendText(chatId, '\u2705 会话已重置，下次消息将开始新对话。');
+          await bot.agentManager.reset(sessionKey);
+          await sendText(bot.larkClient, chatId, '\u2705 会话已重置，下次消息将开始新对话。', userId);
           return;
         }
         if (lower === '/stop') {
-          if (agentManager) await agentManager.cancel(sessionKey);
-          await sendText(chatId, '\u23F9 已请求停止当前任务。');
+          await bot.agentManager.cancel(sessionKey);
+          await sendText(bot.larkClient, chatId, '\u23F9 已请求停止当前任务。', userId);
           return;
         }
         if (lower === '/status') {
           const lines = [
+            `**Bot:** \`${bot.appId.slice(0, 16)}...\` ${bot.label ? `(${bot.label})` : ''}`,
             `**Chat:** \`${chatId.slice(0, 12)}...\``,
             `**User:** \`${userId.slice(0, 12)}...\``,
-            `**Agent:** ${agentManager?.agentName ?? 'none'}`,
-            `**Project:** \`${currentConfig?.projectPath || 'N/A'}\``,
-            `**Feishu:** ${feishuStatus}`,
+            `**Agent:** ${bot.agentManager.agentName}`,
+            `**Project:** \`${platformConfig?.projectPath || 'N/A'}\``,
+            `**Status:** ${bot.status}`,
           ];
-          await sendText(chatId, lines.join('\n'));
+          await sendText(bot.larkClient, chatId, lines.join('\n'), userId);
           return;
         }
 
-        // ─── Download media if present ────────────────────────────────────
+        // ─── Download media if present ───────────────────────────────
         const files: string[] = [];
         if (imageKey) {
-          const p = await downloadFeishuImage(messageId, imageKey);
+          const p = await downloadFeishuImage(bot.larkClient, messageId, imageKey);
           if (p) files.push(p);
         }
         if (fileKey && fileName) {
-          const p = await downloadFeishuFile(messageId, fileKey, fileName);
+          const p = await downloadFeishuFile(bot.larkClient, messageId, fileKey, fileName);
           if (p) files.push(p);
         }
 
-        // ─── Dispatch to agent ────────────────────────────────────────────
-        if (!agentManager) {
-          log('error', 'DROP: agentManager not initialized');
-          await sendText(chatId, '\u26A0\uFE0F Agent not initialized. Check sidecar logs.');
-          return;
-        }
-
-        // Pre-flight check: if the agent is openclaw, verify gateway is running
-        // before attempting to dispatch — gives the user a clear message instead
-        // of a cryptic RPC error after a long startup wait.
-        if (agentManager.agentName === 'openclaw') {
+        // ─── Pre-flight check for openclaw ───────────────────────────
+        if (bot.agentManager.agentName === 'openclaw') {
           try {
             const ocStatus = getOpenClawAgent().status();
             if (!ocStatus.started || !ocStatus.processAlive) {
-              log('warn', `OpenClaw gateway not running (started=${ocStatus.started} alive=${ocStatus.processAlive}), notifying user`);
-              await sendText(chatId, '\u26A0\uFE0F OpenClaw 网关未启动，请先在应用中启动 OpenClaw 后再发送消息。');
+              log('warn', `OpenClaw gateway not running, notifying user`);
+              await sendText(bot.larkClient, chatId, '\u26A0\uFE0F OpenClaw 网关未启动，请先在应用中启动 OpenClaw 后再发送消息。', userId);
               return;
             }
             if (!ocStatus.wsConnected) {
-              log('warn', 'OpenClaw gateway WS not connected, notifying user');
-              await sendText(chatId, '\u26A0\uFE0F OpenClaw 网关 WebSocket 未连接，请检查日志。');
+              log('warn', 'OpenClaw gateway WS not connected');
+              await sendText(bot.larkClient, chatId, '\u26A0\uFE0F OpenClaw 网关 WebSocket 未连接，请检查日志。', userId);
               return;
             }
-          } catch {
-            // getOpenClawAgent() may throw if not initialized — that's fine,
-            // let the normal dispatch path handle it.
-          }
+          } catch {}
         }
 
         log(
           'event',
-          `DISPATCH → agent=${agentManager.agentName} cwd=${currentConfig?.projectPath || '(empty)'} prompt="${text.slice(0, 40)}" files=${files.length}`,
+          `[${bot.appId.slice(0, 12)}] DISPATCH → agent=${bot.agentManager.agentName} prompt="${text.slice(0, 40)}" files=${files.length}`,
         );
 
-        // Begin card rendering for this turn (creates thinking card + typing reaction)
-        cardRenderer.begin(chatId, messageId);
-        cardRenderer.addTypingReaction(chatId, messageId).catch(() => {});
+        // Begin card rendering for this turn
+        bot.cardRenderer.begin(chatId, messageId, userId);
+        bot.cardRenderer.addTypingReaction(chatId, messageId).catch(() => {});
 
         try {
-          await agentManager.handle({
+          await bot.agentManager.handle({
             platform: 'feishu',
             channelId: chatId,
             userId,
-            cwd: currentConfig?.projectPath || '',
+            cwd: platformConfig?.projectPath || '',
             prompt: text,
             files,
           });
-          log('event', `DONE chat=${chatId?.slice(0, 12)} msg=${messageId?.slice(0, 12)}`);
+          log('event', `[${bot.appId.slice(0, 12)}] DONE chat=${chatId?.slice(0, 12)}`);
         } catch (err: any) {
-          log('error', 'agentManager.handle:', err.message);
-          await cardRenderer.processEvent(chatId, {
+          log('error', `[${bot.appId.slice(0, 12)}] agentManager.handle:`, err.message);
+          await bot.cardRenderer.processEvent(chatId, {
             type: 'result',
             error: err.message || String(err),
           });
         }
       } catch (err: any) {
-        log('error', 'event handler:', err.message);
+        log('error', `[${bot.appId.slice(0, 12)}] event handler:`, err.message);
       }
     },
   });
@@ -576,106 +555,236 @@ function createEventDispatcher(): lark.EventDispatcher {
 }
 
 // ============================================================================
-// Feishu Connection
+// Bot lifecycle
 // ============================================================================
-function emitStatus() {
-  bus.emit('event', {
-    type: 'status',
-    feishu: {
-      status: feishuStatus,
-      error: feishuError,
-      appId: currentConfig?.appId || null,
-    },
-    agent: agentManager?.agentName ?? null,
-    uptimeMs: Date.now() - startedAt,
+
+async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
+  const { appId, appSecret, assignment, label } = channel;
+  log('info', `connectBot ${appId.slice(0, 12)} assignment=${assignment} label=${label}`);
+
+  const larkClient = new lark.Client({
+    appId,
+    appSecret,
+    disableTokenCache: false,
   });
-}
 
-async function connectFeishu(): Promise<{ ok: boolean; error?: string }> {
-  if (!currentConfig?.appId || !currentConfig?.appSecret) {
-    feishuStatus = 'error';
-    feishuError = 'missing appId/appSecret';
-    emitStatus();
-    return { ok: false, error: feishuError };
-  }
+  const cardRenderer = new CardRenderer({ larkClient });
 
-  // Idempotency guard: if already connected, skip — prevents the dual-
-  // WSClient bug where both the sidecar auto-start and the Rust parent's
-  // platform_connect_feishu both call this function, creating two WS
-  // connections to the same bot. Feishu's backend only routes events to
-  // ONE connection, so the second steals events from the first.
-  if (feishuStatus === 'running' && wsClient) {
-    log('info', 'connectFeishu: already connected, skipping');
-    return { ok: true };
-  }
-
-  feishuStatus = 'starting';
-  feishuError = null;
-  emitStatus();
-
-  try {
-    // Ensure agent manager exists before accepting messages
-    if (!agentManager) {
-      await initAgentManager(currentConfig.agentType);
-    }
-
-    larkClient = new lark.Client({
-      appId: currentConfig.appId,
-      appSecret: currentConfig.appSecret,
-      disableTokenCache: false,
+  // Init agentManager if assigned
+  let agentManager: AgentManager | null = null;
+  if (assignment !== 'none') {
+    const agent = createAgent(assignment as AgentType);
+    agentManager = new AgentManager(agent);
+    // Wire agent events → this bot's card renderer
+    agentManager.onEvent((_key, evt) => {
+      // sessionKey format: "feishu:chatId:userId" (from makeSessionKey)
+      const [, chatId] = _key.split(':');
+      cardRenderer.processEvent(chatId, evt).catch((e) =>
+        log('error', `[${appId.slice(0, 12)}] cardRenderer.processEvent:`, e.message),
+      );
     });
-    cardRenderer.setLarkClient(larkClient);
+  }
 
-    // Fetch bot's own open_id for group-chat @mention matching.
-    // The SDK exposes this via different paths depending on version.
-    try {
-      let info: any;
-      // v1.58+ path: larkClient.bot.v3.botInfo.get()
-      if ((larkClient as any).bot?.v3?.botInfo?.get) {
-        info = await (larkClient as any).bot.v3.botInfo.get();
-      } else {
-        // Fallback: raw HTTP call — always works regardless of SDK shape.
-        info = await larkClient.request({
-          method: 'GET',
-          url: 'https://open.feishu.cn/open-apis/bot/v3/info',
-        });
-      }
-      botOpenId = info?.data?.bot?.open_id || info?.bot?.open_id || null;
-      log('info', 'Bot open_id:', botOpenId);
-    } catch (e: any) {
-      log('warn', 'Could not get bot info (non-fatal, group @mention may not filter):', e.message);
+  const bot: BotConnection = {
+    appId,
+    appSecret,
+    assignment: assignment as AgentType | 'none',
+    label,
+    larkClient,
+    wsClient: null,
+    botOpenId: null,
+    agentManager,
+    cardRenderer,
+    status: 'starting',
+    error: null,
+  };
+
+  // Fetch bot's own open_id for group-chat @mention matching
+  try {
+    let info: any;
+    if ((larkClient as any).bot?.v3?.botInfo?.get) {
+      info = await (larkClient as any).bot.v3.botInfo.get();
+    } else {
+      info = await larkClient.request({
+        method: 'GET',
+        url: 'https://open.feishu.cn/open-apis/bot/v3/info',
+      });
     }
+    bot.botOpenId = info?.data?.bot?.open_id || info?.bot?.open_id || null;
+    log('info', `[${appId.slice(0, 12)}] Bot open_id: ${bot.botOpenId}`);
+  } catch (e: any) {
+    log('warn', `[${appId.slice(0, 12)}] Could not get bot info:`, e.message);
+  }
 
-    const dispatcher = createEventDispatcher();
-    wsClient = new lark.WSClient({
-      appId: currentConfig.appId,
-      appSecret: currentConfig.appSecret,
+  // Create event dispatcher and connect WSClient
+  const dispatcher = createEventDispatcher(bot);
+  try {
+    const wsClient = new lark.WSClient({
+      appId,
+      appSecret,
       loggerLevel: lark.LoggerLevel.info,
     });
     await wsClient.start({ eventDispatcher: dispatcher });
-
-    feishuStatus = 'running';
-    emitStatus();
-    log('info', `Feishu WSClient connected (appId=${currentConfig.appId})`);
-    return { ok: true };
+    bot.wsClient = wsClient;
+    bot.status = 'running';
+    log('info', `[${appId.slice(0, 12)}] WSClient connected`);
   } catch (err: any) {
-    feishuStatus = 'error';
-    feishuError = err.message;
-    emitStatus();
-    log('error', 'Feishu connect failed:', err.message);
-    return { ok: false, error: err.message };
+    bot.status = 'error';
+    bot.error = err.message;
+    log('error', `[${appId.slice(0, 12)}] WSClient connect failed:`, err.message);
+  }
+
+  bots.set(appId, bot);
+  emitStatus();
+  return bot;
+}
+
+async function disconnectBot(appId: string): Promise<void> {
+  const bot = bots.get(appId);
+  if (!bot) return;
+  log('info', `disconnectBot ${appId.slice(0, 12)}`);
+
+  // Detach agentManager (keep underlying agent alive)
+  if (bot.agentManager) {
+    try { await bot.agentManager.detach(); } catch {}
+    bot.agentManager = null;
+  }
+
+  // Shutdown card renderer
+  try { await bot.cardRenderer.shutdown(); } catch {}
+
+  // WSClient — no explicit close method, just null the reference
+  bot.wsClient = null;
+
+  bot.status = 'stopped';
+  bot.error = null;
+  bots.delete(appId);
+  emitStatus();
+}
+
+/**
+ * reconcileBots — read im-channels.json and sync with live bots Map.
+ * - New assigned channels → connectBot
+ * - Removed channels → disconnectBot
+ * - Assignment changed → send notification card, reconnect with new agent
+ * - Unassigned channels → disconnect (per user requirement)
+ */
+let reconciling = false;
+async function reconcileBots(): Promise<void> {
+  if (reconciling) {
+    log('info', 'reconcileBots already in progress, skipping');
+    return;
+  }
+  reconciling = true;
+  try {
+    await _reconcileBotsInner();
+  } finally {
+    reconciling = false;
+  }
+}
+async function _reconcileBotsInner(): Promise<void> {
+  const channels = loadChannelsFromDisk();
+  const desiredAppIds = new Set<string>();
+  const projectPath = platformConfig?.projectPath || defaultProjectPath();
+
+  for (const ch of channels) {
+    if (!ch.appId || !ch.appSecret) continue;
+
+    desiredAppIds.add(ch.appId);
+    const existing = bots.get(ch.appId);
+
+    if (!existing) {
+      // New channel — connect if assigned, skip if unassigned
+      if (ch.assignment !== 'none') {
+        await connectBot(ch);
+      }
+    } else if (existing.assignment !== ch.assignment) {
+      // Assignment changed
+      const oldAssignment = existing.assignment;
+      const newAssignment = ch.assignment;
+
+      if (newAssignment === 'none') {
+        // Switched to unassigned → send farewell card → disconnect
+        log('info', `[${ch.appId.slice(0, 12)}] switched to unassigned, sending farewell`);
+        // Send farewell card on ALL recent chats? No — we just send via a generic approach.
+        // The bot is still connected briefly, so if any chat is active we notify.
+        // For simplicity, just disconnect. The card was sent from the frontend notification.
+        await disconnectBot(ch.appId);
+      } else {
+        // Switched to a different agent
+        log('info', `[${ch.appId.slice(0, 12)}] switching ${oldAssignment} → ${newAssignment}`);
+
+        // Detach old agentManager
+        if (existing.agentManager) {
+          try { await existing.agentManager.detach(); } catch {}
+        }
+
+        // Create new agentManager
+        const agent = createAgent(newAssignment as AgentType);
+        const agentManager = new AgentManager(agent);
+        agentManager.onEvent((_key, evt) => {
+          const [, chatId] = _key.split(':');
+          existing.cardRenderer.processEvent(chatId, evt).catch((e) =>
+            log('error', `[${ch.appId.slice(0, 12)}] cardRenderer.processEvent:`, e.message),
+          );
+        });
+
+        existing.agentManager = agentManager;
+        existing.assignment = newAssignment as AgentType | 'none';
+        existing.label = ch.label;
+        log('info', `[${ch.appId.slice(0, 12)}] now assigned to ${newAssignment}`);
+        emitStatus();
+      }
+    } else {
+      // Same assignment — update label if changed
+      existing.label = ch.label;
+    }
+  }
+
+  // Disconnect bots no longer in im-channels.json
+  for (const [appId] of bots) {
+    if (!desiredAppIds.has(appId)) {
+      log('info', `[${appId.slice(0, 12)}] removed from channels, disconnecting`);
+      await disconnectBot(appId);
+    }
   }
 }
 
-async function disconnectFeishu(): Promise<{ ok: boolean }> {
-  wsClient = null;
-  larkClient = null;
-  cardRenderer.setLarkClient(null);
-  botOpenId = null;
-  feishuStatus = 'stopped';
-  feishuError = null;
-  emitStatus();
-  return { ok: true };
+// ============================================================================
+// Status emission
+// ============================================================================
+
+function emitStatus() {
+  const botStatuses: any[] = [];
+  for (const [appId, bot] of bots) {
+    botStatuses.push({
+      appId,
+      label: bot.label,
+      assignment: bot.assignment,
+      status: bot.status,
+      error: bot.error,
+      agent: bot.agentManager?.agentName ?? null,
+    });
+  }
+
+  bus.emit('event', {
+    type: 'status',
+    // Backward compat: report first running bot's status as the "feishu" status
+    feishu: {
+      status: botStatuses.find((b) => b.status === 'running')
+        ? 'running'
+        : botStatuses.find((b) => b.status === 'starting')
+          ? 'starting'
+          : botStatuses.find((b) => b.status === 'error')
+            ? 'error'
+            : 'stopped',
+      error: botStatuses.find((b) => b.error)?.error ?? null,
+      appId: botStatuses.find((b) => b.status === 'running')?.appId ?? null,
+    },
+    bots: botStatuses,
+    agent: botStatuses.find((b) => b.agent)?.agent ?? null,
+    uptimeMs: Date.now() - startedAt,
+  });
 }
 
 // ============================================================================
@@ -716,21 +825,10 @@ function handleSse(req: http.IncomingMessage, res: http.ServerResponse) {
   bus.on('event', listener);
 
   // Initial snapshot
-  listener({
-    type: 'status',
-    feishu: {
-      status: feishuStatus,
-      error: feishuError,
-      appId: currentConfig?.appId || null,
-    },
-    agent: agentManager?.agentName ?? null,
-    uptimeMs: Date.now() - startedAt,
-  });
+  emitStatus();
 
   const ping = setInterval(() => {
-    try {
-      res.write(`: ping\n\n`);
-    } catch {}
+    try { res.write(`: ping\n\n`); } catch {}
   }, 15000);
   req.on('close', () => {
     clearInterval(ping);
@@ -745,41 +843,51 @@ const server = http.createServer(async (req, res) => {
     const m = req.method || 'GET';
 
     if (m === 'GET' && p === '/health') {
+      const botStatuses: any[] = [];
+      for (const [appId, bot] of bots) {
+        botStatuses.push({
+          appId,
+          label: bot.label,
+          assignment: bot.assignment,
+          status: bot.status,
+          error: bot.error,
+          agent: bot.agentManager?.agentName ?? null,
+        });
+      }
       return sendJson(res, 200, {
         ok: true,
         uptimeMs: Date.now() - startedAt,
+        bots: botStatuses,
+        // Backward compat
         feishu: {
-          status: feishuStatus,
-          error: feishuError,
-          appId: currentConfig?.appId || null,
+          status: botStatuses.find((b) => b.status === 'running')
+            ? 'running'
+            : botStatuses.find((b) => b.status === 'error')
+              ? 'error'
+              : 'stopped',
+          error: botStatuses.find((b) => b.error)?.error ?? null,
+          appId: botStatuses.find((b) => b.status === 'running')?.appId ?? null,
         },
-        agent: agentManager?.agentName ?? null,
+        agent: botStatuses.find((b) => b.agent)?.agent ?? null,
       });
     }
     if (m === 'GET' && p === '/events') return handleSse(req, res);
 
+    // Legacy /config endpoint — update platform config only
     if (m === 'POST' && p === '/config') {
       const body = await readBody(req);
       try {
         const cfg = JSON.parse(body || '{}');
-        const newAgentType: AgentType = (cfg.agentType as AgentType) || 'claudecode';
-        const prevAgentType = currentConfig?.agentType;
-        currentConfig = {
-          appId: cfg.appId || '',
-          appSecret: cfg.appSecret || '',
+        platformConfig = {
           projectPath: cfg.projectPath || '',
           enabled: !!cfg.enabled,
-          agentType: newAgentType,
+          agentType: (cfg.agentType as AgentType) || 'claudecode',
         };
         if (args.config) {
           try {
             fs.mkdirSync(path.dirname(args.config), { recursive: true });
-            fs.writeFileSync(args.config, JSON.stringify(currentConfig, null, 2));
+            fs.writeFileSync(args.config, JSON.stringify(platformConfig, null, 2));
           } catch {}
-        }
-        // Re-init agent if type changed
-        if (newAgentType !== prevAgentType) {
-          await initAgentManager(newAgentType);
         }
         emitStatus();
         return sendJson(res, 200, { ok: true });
@@ -787,48 +895,40 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { ok: false, error: e.message });
       }
     }
-    // Hot-reload: re-read config from disk, re-init agent if type changed,
-    // and reconnect Feishu. Used when switching IM channel assignment so we
-    // don't need to kill/restart the entire sidecar (which would kill OpenClaw).
+
+    // Hot-reload: re-read im-channels.json + platform-config.json, reconcile bots
     if (m === 'POST' && p === '/reload') {
       try {
-        const fresh = loadConfig(args.config);
-        if (fresh) {
-          const prevAgentType = currentConfig?.agentType;
-          currentConfig = fresh;
-          if (fresh.agentType !== prevAgentType) {
-            await initAgentManager(fresh.agentType);
-          }
-          // Disconnect existing Feishu WS so connectFeishu() creates a fresh one
-          // with the (possibly new) credentials.
-          await disconnectFeishu();
-          if (fresh.enabled && fresh.appId && fresh.appSecret) {
-            const r = await connectFeishu();
-            emitStatus();
-            return sendJson(res, r.ok ? 200 : 500, { ok: r.ok, error: r.error, reloaded: true });
-          }
-          emitStatus();
-          return sendJson(res, 200, { ok: true, reloaded: true });
-        }
-        return sendJson(res, 200, { ok: true, reloaded: false, reason: 'no config on disk' });
+        const fresh = loadPlatformConfig(args.config);
+        if (fresh) platformConfig = fresh;
+        await reconcileBots();
+        return sendJson(res, 200, { ok: true, reloaded: true, bots: bots.size });
       } catch (e: any) {
         return sendJson(res, 500, { ok: false, error: e.message });
       }
     }
 
+    // Connect all assigned bots (backward compat)
     if (m === 'POST' && p === '/connect') {
-      const r = await connectFeishu();
-      return sendJson(res, r.ok ? 200 : 500, r);
+      try {
+        await reconcileBots();
+        const running = [...bots.values()].filter((b) => b.status === 'running').length;
+        return sendJson(res, 200, { ok: true, botsConnected: running });
+      } catch (e: any) {
+        return sendJson(res, 500, { ok: false, error: e.message });
+      }
     }
+
+    // Disconnect all bots
     if (m === 'POST' && p === '/disconnect') {
-      const r = await disconnectFeishu();
-      return sendJson(res, 200, r);
+      for (const [appId] of bots) {
+        await disconnectBot(appId);
+      }
+      emitStatus();
+      return sendJson(res, 200, { ok: true });
     }
 
     // ─── OpenClaw controls ──────────────────────────────────────────────
-    // These endpoints go through the module-level OpenClawAgent singleton
-    // so they work regardless of which backend is currently wired to the
-    // Feishu IM bridge — openclaw and claudecode can coexist.
     if (m === 'POST' && p === '/openclaw/start') {
       try {
         await getOpenClawAgent().startGateway();
@@ -855,13 +955,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ─── OpenClaw status + session history ──────────────────────────────
-    // GET /openclaw/status               → gateway process + ws status
-    // GET /openclaw/sessions             → list all sessions (summaries)
-    // GET /openclaw/sessions/:id         → full detail incl. messages
     if (m === 'GET' && p === '/openclaw/status') {
-      // Always active — the singleton OpenClawAgent is always present, even
-      // when the IM bridge is using claudecode. Status reflects the gateway
-      // process itself, not the IM wiring.
       let ocStatus: OpenClawStatus | null = null;
       try {
         ocStatus = getOpenClawAgent().status();
@@ -906,38 +1000,29 @@ const server = http.createServer(async (req, res) => {
 // ============================================================================
 // Startup
 // ============================================================================
-currentConfig = loadConfig(args.config);
-if (!currentConfig) {
-  // No platform-config.json yet — synthesize one so the agent manager can
-  // initialize and the OpenClaw Sessions controls are usable immediately.
-  // We do NOT persist this to disk; the first real saveConfig() call from
-  // the UI will write the file.
-  currentConfig = defaultConfig();
-  log('info', 'no config on disk, using default (agentType=openclaw)');
+platformConfig = loadPlatformConfig(args.config);
+if (!platformConfig) {
+  platformConfig = {
+    projectPath: defaultProjectPath(),
+    enabled: false,
+    agentType: 'claudecode',
+  };
+  log('info', 'no platform config on disk, using defaults');
 } else {
-  log('info', 'config loaded');
+  log('info', 'platform config loaded');
 }
 
-// Initialize agent manager eagerly so it's ready when Feishu connects OR
-// when the user hits the OpenClaw Sessions page.
-initAgentManager(currentConfig.agentType).catch((e: any) =>
-  log('error', 'initAgentManager:', e.message),
-);
+// NOTE: we deliberately do NOT auto-connect bots here. The Rust parent
+// (main.rs) is the single source of truth — it calls platform_connect_feishu
+// after the sidecar signals READY. If we auto-connected here too, both
+// paths would create competing WSClient instances for the same bot.
+// The Rust parent's /connect call triggers reconcileBots().
 
 server.listen(args.port, '127.0.0.1', () => {
   const addr = server.address();
   const actualPort = typeof addr === 'object' && addr ? addr.port : args.port;
   process.stdout.write(`FROGCODE_PLATFORM_READY port=${actualPort}\n`);
   log('info', `listening on 127.0.0.1:${actualPort}`);
-
-  // NOTE: we deliberately do NOT auto-connect to Feishu here, even if
-  // `currentConfig.enabled` is true. The Rust parent (main.rs) is the
-  // single source of truth for calling platform_connect_feishu after
-  // the sidecar signals READY. If we auto-connected here too, both
-  // paths would create competing WSClient instances against the same
-  // bot — Feishu's backend only delivers events to ONE connection, so
-  // one of them would silently steal messages from the other.
-  // See connectFeishu() idempotency guard for a second line of defense.
 });
 
 server.on('error', (e: any) => {
@@ -954,11 +1039,12 @@ function shutdown(sig: string) {
   shuttingDown = true;
   log('info', `received ${sig}, shutting down`);
   (async () => {
+    for (const [appId] of bots) {
+      try { await disconnectBot(appId); } catch {}
+    }
+    // Stop openclaw gateway if running
     try {
-      if (agentManager) await agentManager.shutdown();
-    } catch {}
-    try {
-      await cardRenderer.shutdown();
+      if (openclawAgent) await openclawAgent.stopGateway();
     } catch {}
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();

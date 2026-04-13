@@ -178,6 +178,23 @@ fn append_lifecycle_log(event: &str, detail: &str) {
     }
 }
 
+/// Frontend can write log lines to the sidecar log file so they appear
+/// in the system log view alongside sidecar/feishu/openclaw entries.
+#[tauri::command]
+pub async fn platform_write_log(level: String, message: String) -> Result<(), String> {
+    let dir = config_dir()?;
+    let path = dir.join("platform-sidecar.log");
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("open log: {}", e))?;
+    use std::io::Write;
+    let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+    let _ = writeln!(f, "[{}] [ui {}] {}", ts, level, message);
+    Ok(())
+}
+
 fn config_path() -> Result<PathBuf, String> {
     Ok(config_dir()?.join("platform-config.json"))
 }

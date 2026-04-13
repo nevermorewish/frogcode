@@ -121,63 +121,29 @@ export const IMChannelsView: React.FC = () => {
   }, [agentDropdownId]);
 
   const saveAndApply = async (updated: IMChannelConfig[]) => {
-    // Save to im-channels.json
+    // Save to im-channels.json — the sidecar reads this directly
     await api.saveImChannels({ channels: updated });
     setChannels(updated);
 
-    // Find active assigned channel and sync to platform config
-    const claudeChannel = updated.find(ch => ch.assignment === 'claudecode');
-    const openclawChannel = updated.find(ch => ch.assignment === 'openclaw');
+    const hasAnyAssigned = updated.some(ch => ch.assignment !== 'none');
 
-    // Determine which agent is primary (most recently assigned)
-    const activeAgent = claudeChannel ? 'claudecode' : openclawChannel ? 'openclaw' : '';
-    const activeChannel = claudeChannel || openclawChannel;
-
-    // Sync feishu creds to the assigned agent's config
-    if (claudeChannel) {
-      const agentCfg = await api.platform.getAgentConfig('claudecode').catch(() => ({})) as any;
-      await api.platform.saveAgentConfig('claudecode', {
-        ...agentCfg,
-        feishu: { appId: claudeChannel.appId, appSecret: claudeChannel.appSecret },
-      });
-    }
-    if (openclawChannel) {
-      const agentCfg = await api.platform.getAgentConfig('openclaw').catch(() => ({})) as any;
-      await api.platform.saveAgentConfig('openclaw', {
-        ...agentCfg,
-        feishu: { appId: openclawChannel.appId, appSecret: openclawChannel.appSecret },
-      });
-    }
-
-    // Update platform config
+    // Keep platform config in sync for projectPath/enabled
     const cfg = await api.platform.getConfig().catch(() => ({
       appId: '', appSecret: '', projectPath: '', enabled: false,
     })) as any;
+    await api.platform.saveConfig({
+      ...cfg,
+      enabled: hasAnyAssigned,
+    });
 
-    if (activeChannel) {
-      await api.platform.saveConfig({
-        ...cfg,
-        appId: activeChannel.appId,
-        appSecret: activeChannel.appSecret,
-        agentType: activeAgent,
-        enabled: true,
-      });
-      // Hot-reload: tell sidecar to re-read config and reconnect Feishu
-      // without restarting the process — keeps OpenClaw gateway alive.
-      const status = await api.platform.status().catch(() => ({ status: 'stopped' }));
-      if (status.status === 'running') {
-        try { await api.platform.reloadConfig(); } catch {}
-      } else {
-        await api.platform.start();
-        try { await api.platform.connectFeishu(); } catch {}
-      }
-    } else {
-      await api.platform.saveConfig({ ...cfg, enabled: false });
-      // Sidecar stays alive — just disconnect Feishu via reload
-      const status = await api.platform.status().catch(() => ({ status: 'stopped' }));
-      if (status.status === 'running') {
-        try { await api.platform.reloadConfig(); } catch {}
-      }
+    // Tell sidecar to reconcile bots from im-channels.json
+    const status = await api.platform.status().catch(() => ({ status: 'stopped' }));
+    if (status.status === 'running') {
+      try { await api.platform.reloadConfig(); } catch {}
+    } else if (hasAnyAssigned) {
+      // Start sidecar if not running and at least one bot is assigned
+      await api.platform.start();
+      try { await api.platform.connectFeishu(); } catch {}
     }
   };
 

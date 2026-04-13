@@ -25,7 +25,8 @@ use commands::platform_bridge::{
     platform_get_openclaw_session, platform_get_openclaw_status, platform_list_openclaw_sessions,
     platform_openclaw_restart, platform_openclaw_start, platform_openclaw_stop,
     platform_read_log, platform_reload_config, platform_save_agent_config, platform_save_config,
-    platform_start, platform_status, platform_stop, get_im_channels, save_im_channels,
+    platform_start, platform_status, platform_stop, platform_write_log,
+    get_im_channels, save_im_channels,
     PlatformBridgeState,
 };
 use commands::acemcp::{
@@ -244,10 +245,10 @@ fn main() {
                     Ok(_) => {
                         log::info!("Platform sidecar auto-started");
                         if let Ok(cfg) = commands::platform_bridge::platform_get_config().await {
-                            // Only connect Feishu if the user has explicitly enabled it
-                            // with valid credentials — otherwise leave the sidecar idle
-                            // and ready for OpenClaw controls.
-                            if cfg.enabled && !cfg.app_id.is_empty() {
+                            // Connect Feishu bots if enabled — the sidecar reads
+                            // im-channels.json directly to determine which bots to
+                            // connect, so we don't need credentials here.
+                            if cfg.enabled {
                                 let state2 = app_handle_for_platform.state::<PlatformBridgeState>();
                                 let _ = commands::platform_bridge::platform_connect_feishu(state2).await;
                                 log::info!("Feishu auto-connected");
@@ -635,6 +636,7 @@ fn main() {
             platform_connect_feishu,
             platform_reload_config,
             platform_read_log,
+            platform_write_log,
             platform_get_openclaw_status,
             platform_openclaw_start,
             platform_openclaw_stop,

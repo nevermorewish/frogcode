@@ -120,6 +120,27 @@ function buildCardJson(state: CardState): string {
   });
 }
 
+/**
+ * Extract a plain-text summary from CardState — used as last-resort fallback
+ * when interactive card delivery fails completely.
+ */
+function buildPlainText(state: CardState): string {
+  const parts: string[] = [];
+  if (state.errorMessage) {
+    parts.push(`[Error] ${state.errorMessage}`);
+  }
+  if (state.responseText) {
+    parts.push(state.responseText.slice(0, 4000));
+  }
+  if (state.toolCalls.length > 0) {
+    parts.push(state.toolCalls.map((t) => `[${t.status}] ${t.name} ${t.detail}`).join('\n'));
+  }
+  if (parts.length === 0 && state.status === 'thinking') {
+    parts.push('(thinking...)');
+  }
+  return parts.join('\n\n');
+}
+
 // ---------------------------------------------------------------------------
 // CardRenderer
 // ---------------------------------------------------------------------------
@@ -135,6 +156,8 @@ interface ChatCardState {
   flushTimer: ReturnType<typeof setTimeout> | null;
   /** Feishu message_id of the user's message (for reply-in-thread). */
   replyToMessageId?: string;
+  /** User open_id — used as fallback receive_id when chat_id fails. */
+  userId?: string;
   /** Emoji reaction on the original message to show "typing". */
   typingReaction?: { messageId: string; reactionId: string };
   /** Guard against concurrent sendCard — wait for this before flushing. */
@@ -159,8 +182,9 @@ export class CardRenderer {
   /**
    * Begin tracking a new turn for a chat.
    * chatId is the Feishu chat_id; replyToMessageId for thread mode.
+   * userId is the sender's open_id — used as fallback when chat_id send fails.
    */
-  begin(chatId: string, replyToMessageId?: string): void {
+  begin(chatId: string, replyToMessageId?: string, userId?: string): void {
     // Clean up any existing flush timer
     const existing = this.chats.get(chatId);
     if (existing?.flushTimer) clearTimeout(existing.flushTimer);
@@ -171,6 +195,7 @@ export class CardRenderer {
       lastFlush: 0,
       flushTimer: null,
       replyToMessageId,
+      userId,
       createPromise: null,
     });
   }
@@ -261,10 +286,19 @@ export class CardRenderer {
     if (!chat.feishuMessageId) {
       // First flush: create card — store the promise so concurrent
       // callers wait instead of creating a second card.
-      const p = this.sendCard(chatId, content, chat.replyToMessageId);
+      const p = this.sendCard(chatId, content, chat.replyToMessageId, chat.userId);
       chat.createPromise = p;
       chat.feishuMessageId = await p;
       chat.createPromise = null;
+
+      // Card delivery completely failed — fall back to plain text so the
+      // user always gets a response in Feishu no matter what.
+      if (!chat.feishuMessageId) {
+        const plainText = buildPlainText(chat.cardState);
+        if (plainText) {
+          await this.sendPlainText(chatId, plainText, chat.replyToMessageId, chat.userId);
+        }
+      }
     } else {
       // Update existing card
       await this.updateCard(chat.feishuMessageId, content);
@@ -277,10 +311,12 @@ export class CardRenderer {
     chatId: string,
     content: string,
     replyToMessageId?: string,
+    userId?: string,
   ): Promise<string | null> {
     const client = this.deps.larkClient;
     if (!client) return null;
     try {
+      // 1. Try reply to the original message
       if (replyToMessageId) {
         try {
           const resp = await (client as any).im.v1.message.reply({
@@ -293,15 +329,83 @@ export class CardRenderer {
           // fallback to create
         }
       }
-      const resp = await client.im.v1.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: { receive_id: chatId, content, msg_type: 'interactive' },
-      });
-      return (resp as any)?.data?.message_id ?? null;
+      // 2. Try create with chat_id
+      try {
+        const resp = await client.im.v1.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { receive_id: chatId, content, msg_type: 'interactive' },
+        });
+        const mid = (resp as any)?.data?.message_id;
+        if (mid) return mid;
+      } catch (err: any) {
+        log('warn', `sendCard chat_id failed: ${err.message?.slice(0, 120)}`);
+      }
+      // 3. Fallback: try create with open_id (P2P chats where bot is "not in chat")
+      if (userId) {
+        try {
+          const resp = await client.im.v1.message.create({
+            params: { receive_id_type: 'open_id' },
+            data: { receive_id: userId, content, msg_type: 'interactive' },
+          });
+          const mid = (resp as any)?.data?.message_id;
+          if (mid) {
+            log('info', 'sendCard succeeded via open_id fallback');
+            return mid;
+          }
+        } catch (err: any) {
+          log('error', `sendCard open_id fallback failed: ${err.message?.slice(0, 120)}`);
+        }
+      }
+      return null;
     } catch (err: any) {
       log('error', 'sendCard:', err.message);
       return null;
     }
+  }
+
+  /**
+   * Last-resort plain text delivery when all card methods fail.
+   * Tries: reply → chat_id text → open_id text.
+   */
+  private async sendPlainText(
+    chatId: string,
+    text: string,
+    replyToMessageId?: string,
+    userId?: string,
+  ): Promise<void> {
+    const client = this.deps.larkClient;
+    if (!client) return;
+    const content = JSON.stringify({ text });
+
+    // 1. reply
+    if (replyToMessageId) {
+      try {
+        const resp = await (client as any).im.v1.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { content, msg_type: 'text', reply_in_thread: false },
+        });
+        if (resp?.data?.message_id) { log('info', 'plainText reply succeeded'); return; }
+      } catch {}
+    }
+    // 2. chat_id
+    try {
+      const resp = await client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: chatId, content, msg_type: 'text' },
+      });
+      if ((resp as any)?.data?.message_id) { log('info', 'plainText chat_id succeeded'); return; }
+    } catch {}
+    // 3. open_id
+    if (userId) {
+      try {
+        const resp = await client.im.v1.message.create({
+          params: { receive_id_type: 'open_id' },
+          data: { receive_id: userId, content, msg_type: 'text' },
+        });
+        if ((resp as any)?.data?.message_id) { log('info', 'plainText open_id succeeded'); return; }
+      } catch {}
+    }
+    log('error', `ALL delivery methods failed for chat=${chatId.slice(0, 12)}`);
   }
 
   private async updateCard(messageId: string, content: string): Promise<void> {

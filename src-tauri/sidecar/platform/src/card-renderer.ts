@@ -137,6 +137,8 @@ interface ChatCardState {
   replyToMessageId?: string;
   /** Emoji reaction on the original message to show "typing". */
   typingReaction?: { messageId: string; reactionId: string };
+  /** Guard against concurrent sendCard — wait for this before flushing. */
+  createPromise: Promise<string | null> | null;
 }
 
 const THROTTLE_MS = 300;
@@ -169,6 +171,7 @@ export class CardRenderer {
       lastFlush: 0,
       flushTimer: null,
       replyToMessageId,
+      createPromise: null,
     });
   }
 
@@ -245,12 +248,23 @@ export class CardRenderer {
     const chat = this.chats.get(chatId);
     if (!chat || !this.deps.larkClient) return;
 
+    // If a sendCard is in flight, wait for it to complete first so we
+    // don't create a duplicate card (race between scheduled flush and
+    // the immediate final-state flush).
+    if (chat.createPromise) {
+      await chat.createPromise;
+    }
+
     const content = buildCardJson(chat.cardState);
     chat.lastFlush = Date.now();
 
     if (!chat.feishuMessageId) {
-      // First flush: create card
-      chat.feishuMessageId = await this.sendCard(chatId, content, chat.replyToMessageId);
+      // First flush: create card — store the promise so concurrent
+      // callers wait instead of creating a second card.
+      const p = this.sendCard(chatId, content, chat.replyToMessageId);
+      chat.createPromise = p;
+      chat.feishuMessageId = await p;
+      chat.createPromise = null;
     } else {
       // Update existing card
       await this.updateCard(chat.feishuMessageId, content);

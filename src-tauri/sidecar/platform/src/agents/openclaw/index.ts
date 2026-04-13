@@ -342,6 +342,8 @@ class OpenClawSession implements AgentSession {
           finish('openclaw response timed out (5min)');
         }, TIMEOUT_MS);
 
+        let textAccum = '';  // accumulate text for logging
+
         const onEvent = (eventName: string, payload: any) => {
           // Filter: only process events for our run
           if (runId && payload?.runId && payload.runId !== runId) return;
@@ -352,12 +354,15 @@ class OpenClawSession implements AgentSession {
             const data = payload?.data;
 
             if (stream === 'assistant' && typeof data?.delta === 'string') {
+              textAccum += data.delta;
               emit({ type: 'text', delta: data.delta });
               return;
             }
 
             if (stream === 'lifecycle') {
+              log('info', `event agent/lifecycle phase=${data?.phase} runId=${payload?.runId?.slice(0, 8)}`);
               if (data?.phase === 'end') {
+                log('info', `model response (${textAccum.length} chars): ${textAccum.slice(0, 200)}${textAccum.length > 200 ? '...' : ''}`);
                 finish();
                 return;
               }
@@ -366,6 +371,7 @@ class OpenClawSession implements AgentSession {
             }
 
             if (stream === 'tool_use' || stream === 'tool_call') {
+              log('info', `event agent/${stream} name=${data?.name || data?.tool || '?'}`);
               emit({
                 type: 'tool_use',
                 name: data?.name || data?.tool || 'tool',
@@ -375,19 +381,25 @@ class OpenClawSession implements AgentSession {
             }
 
             if (stream === 'tool_result') {
+              log('info', `event agent/tool_result ok=${!data?.error}`);
               emit({ type: 'tool_result', ok: !data?.error });
               return;
             }
 
             if (stream === 'error') {
+              log('error', `event agent/error: ${data?.message || data?.error}`);
               finish(data?.message || data?.error || 'openclaw agent error');
               return;
             }
+
+            // Unknown stream — log for debugging
+            log('info', `event agent/${stream} (unhandled) data=${JSON.stringify(data)?.slice(0, 200)}`);
             return;
           }
 
           // ── "chat" events (alternative completion path) ─────────────
           if (eventName === 'chat') {
+            log('info', `event chat state=${payload?.state} contentLen=${JSON.stringify(payload?.message?.content)?.length ?? 0}`);
             if (payload?.state === 'final') {
               // Extract final text from message content
               const content = payload?.message?.content;
@@ -399,6 +411,10 @@ class OpenClawSession implements AgentSession {
                   }
                 }
               }
+              if (textAccum.length === 0) {
+                log('warn', 'chat.final arrived but no text was streamed via agent/assistant deltas');
+              }
+              log('info', `model response (${textAccum.length} chars): ${textAccum.slice(0, 200)}${textAccum.length > 200 ? '...' : ''}`);
               finish();
               return;
             }
@@ -408,9 +424,13 @@ class OpenClawSession implements AgentSession {
 
           // ── "error" event ───────────────────────────────────────────
           if (eventName === 'error') {
+            log('error', `event error: ${payload?.message || payload?.error}`);
             finish(payload?.message || payload?.error || 'openclaw error');
             return;
           }
+
+          // Unknown event — log for debugging
+          log('info', `event ${eventName} (unhandled) payload=${JSON.stringify(payload)?.slice(0, 200)}`);
         };
 
         this.ws.on('gateway-event', onEvent);

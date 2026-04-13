@@ -24,6 +24,7 @@ import type {
   SessionKey,
   StartSessionOpts,
 } from './types.js';
+import { deleteStoredSession } from './manager.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -79,17 +80,27 @@ class ClaudeCodeSession implements AgentSession {
     if (this.currentChild) throw new Error('a turn is already in flight');
 
     const resumeId = this.sessionId;
-    const result = await this._doSpawn(opts, resumeId);
+    // When resuming, suppress the error result event so the card stays alive
+    // for the retry — otherwise the card finalizes as "error" and the retry's
+    // events have nowhere to go.
+    const result = await this._doSpawn(opts, resumeId, {
+      suppressErrorResult: !!resumeId,
+    });
 
-    // If resume failed, clear the stale session and retry without --resume
+    // If resume failed, delete the stale session file and retry fresh
     if (result.sawError && resumeId) {
-      log('info', `resume ${resumeId} failed, retrying without --resume`);
+      log('info', `resume ${resumeId} failed, deleting stale session and retrying fresh`);
       this.sessionId = null;
+      deleteStoredSession(this.sessionKey);
       await this._doSpawn(opts, null);
     }
   }
 
-  private async _doSpawn(opts: SendOpts, resumeId: string | null): Promise<{ sawError: boolean }> {
+  private async _doSpawn(
+    opts: SendOpts,
+    resumeId: string | null,
+    spawnOpts?: { suppressErrorResult?: boolean },
+  ): Promise<{ sawError: boolean }> {
     // Prepend attached files as simple file references (matches Rust behaviour)
     const finalPrompt =
       opts.files && opts.files.length > 0
@@ -217,18 +228,23 @@ class ClaudeCodeSession implements AgentSession {
         const isError = msg.is_error === true || msg.subtype === 'error';
         sawError = isError;
 
-        // Optionally emit fallback text if result field has a summary string
-        // and the model didn't stream any text blocks. (Matches Rust behaviour.)
-        if (
-          !isError &&
-          typeof msg.result === 'string' &&
-          msg.result.length > 0
-        ) {
-          // Don't double-emit: the card-renderer tolerates extra text events,
-          // but we already emitted text blocks from assistant messages.
-          // Only emit if no prior text was seen — tracked via a flag we don't have here.
-          // Simpler: always emit; card-renderer will append. But Rust only uses this
-          // when response_text is empty. Omit here for parity.
+        const errorMsg = isError
+          ? typeof msg.result === 'string'
+            ? msg.result
+            : typeof msg.error === 'string'
+              ? msg.error
+              : 'claude reported an error'
+          : undefined;
+
+        if (errorMsg) log('error', `result error: ${errorMsg}`);
+
+        // When a resume attempt fails and we're going to retry, suppress
+        // the error result so the card stays alive (in 'running' state)
+        // for the retry. If we emitted it, the card would finalize as
+        // "error" and the retry's events would be lost.
+        if (isError && spawnOpts?.suppressErrorResult) {
+          log('info', `result error suppressed (will retry without --resume)`);
+          return;
         }
 
         let costUsd: number | undefined;
@@ -256,16 +272,6 @@ class ClaudeCodeSession implements AgentSession {
           if (total > 0) totalTokens = total;
           if (ctx > 0) contextWindow = ctx;
         }
-
-        const errorMsg = isError
-          ? typeof msg.result === 'string'
-            ? msg.result
-            : typeof msg.error === 'string'
-              ? msg.error
-              : 'claude reported an error'
-          : undefined;
-
-        if (errorMsg) log('error', `result error: ${errorMsg}`);
 
         emit({
           type: 'result',

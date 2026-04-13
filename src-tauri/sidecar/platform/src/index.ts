@@ -716,6 +716,24 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
     bot.wsClient = wsClient;
     bot.status = 'running';
     log('info', `[${appId.slice(0, 12)}] WSClient connected`);
+
+    // Send "connected" notification card to all P2P chats
+    {
+      const agentLabel = assignment === 'claudecode' ? 'Claude Code'
+        : assignment === 'openclaw' ? 'OpenClaw' : '未分配';
+      const color = assignment === 'none' ? 'yellow' : 'green';
+      const body = assignment === 'none'
+        ? `飞书机器人已上线${label ? ` (${label})` : ''}\n\n**CLI 后端:** 未分配\n\n请在 Frog Code 应用中为此通道分配 CLI 后端。`
+        : `飞书机器人已上线${label ? ` (${label})` : ''}\n\n**CLI 后端:** ${agentLabel}`;
+      const card = buildNotificationCard(
+        assignment === 'none' ? '\u{1F7E1} 已连接 Frog Code' : '\u{1F7E2} 已连接 Frog Code',
+        color,
+        body,
+      );
+      broadcastNotificationCard(larkClient, card).then((n) =>
+        log('info', `[${appId.slice(0, 12)}] startup notification sent to ${n} chats`),
+      ).catch(() => {});
+    }
   } catch (err: any) {
     bot.status = 'error';
     bot.error = err.message;

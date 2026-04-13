@@ -155,7 +155,9 @@ impl PlatformBridgeState {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                    let _ = std::process::Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .output();
                 }
                 append_lifecycle_log("kill", &format!("sidecar killed sync pid={}", pid));
             }

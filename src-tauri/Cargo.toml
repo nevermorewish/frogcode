@@ -1,6 +1,6 @@
 [package]
 name = "frog-code"
-version = "1.0.7"
+version = "1.0.8"
 description = "Frog Code - Professional desktop application and toolkit for AI CLI"
 authors = ["mufeedvh", "123vviekr"]
 license = "AGPL-3.0"

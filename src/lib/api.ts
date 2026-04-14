@@ -734,6 +734,20 @@ export interface IMChannelConfig {
   assignment: 'claudecode' | 'openclaw' | 'none';
 }
 
+export interface IMChannelsData {
+  channels: IMChannelConfig[];
+  suppressedAppIds: string[];
+}
+
+export function normalizeImChannelsData(data?: Partial<IMChannelsData> | null): IMChannelsData {
+  const channels = Array.isArray(data?.channels) ? data.channels : [];
+  const suppressedAppIds = Array.isArray(data?.suppressedAppIds)
+    ? Array.from(new Set(data.suppressedAppIds.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0)))
+    : [];
+
+  return { channels, suppressedAppIds };
+}
+
 /**
  * API client for interacting with the Rust backend
  */
@@ -4438,12 +4452,13 @@ export const api = {
 
   // ==================== IM Channels ====================
 
-  async getImChannels(): Promise<{ channels: IMChannelConfig[] }> {
-    return await invoke<{ channels: IMChannelConfig[] }>("get_im_channels");
+  async getImChannels(): Promise<IMChannelsData> {
+    const data = await invoke<Partial<IMChannelsData>>("get_im_channels");
+    return normalizeImChannelsData(data);
   },
 
-  async saveImChannels(data: { channels: IMChannelConfig[] }): Promise<void> {
-    return await invoke<void>("save_im_channels", { data });
+  async saveImChannels(data: Partial<IMChannelsData>): Promise<void> {
+    return await invoke<void>("save_im_channels", { data: normalizeImChannelsData(data) });
   },
 
 };

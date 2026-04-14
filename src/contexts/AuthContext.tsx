@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import { api, type FrogclawUserData, type FrogclawToken, type FrogclawSystemProvider, type FrogclawCliProvider } from '@/lib/api';
+import { api, type FrogclawUserData, type FrogclawToken, type FrogclawSystemProvider, type FrogclawCliProvider, normalizeImChannelsData } from '@/lib/api';
 
 export interface OpenClawModelInfo {
   id: string;
@@ -21,6 +21,7 @@ interface AuthContextType {
   feishuAppId: string | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  dismissFeishuAppId: (appId: string) => Promise<void>;
   selectToken: (tokenId: number) => Promise<void>;
   selectEngineToken: (engine: EngineId, tokenId: number) => Promise<void>;
   refreshProviders: () => Promise<void>;
@@ -285,12 +286,19 @@ function applyOpenclawInfo(
  * the per-agent config + platform root config so the sidecar picks them up.
  */
 async function syncFeishuToImChannels(appId: string, appSecret: string) {
-  // 1. Read existing IM channels
-  const data = await api.getImChannels().catch(() => ({ channels: [] })) as any;
-  const channels: any[] = data?.channels || [];
+  // 1. Read existing IM channels (normalized — always has channels + suppressedAppIds)
+  const data = await api.getImChannels().catch(() => normalizeImChannelsData());
+  const { channels, suppressedAppIds } = data;
+
+  // If the user has explicitly dismissed this appId, respect that and do
+  // nothing. Otherwise every login/refresh would re-add the channel and
+  // re-enable the sidecar, making deletion impossible.
+  if (suppressedAppIds.includes(appId)) {
+    return;
+  }
 
   // 2. Check if this appId already exists
-  const existing = channels.find((ch: any) => ch.appId === appId);
+  const existing = channels.find((ch) => ch.appId === appId);
   if (existing) {
     // Already present — ensure it's assigned to openclaw and secret is up to date
     if (existing.assignment !== 'openclaw' || existing.appSecret !== appSecret) {
@@ -300,7 +308,7 @@ async function syncFeishuToImChannels(appId: string, appSecret: string) {
       }
       existing.assignment = 'openclaw';
       existing.appSecret = appSecret;
-      await api.saveImChannels({ channels });
+      await api.saveImChannels({ channels, suppressedAppIds });
     }
   } else {
     // Unassign any existing openclaw channel
@@ -316,7 +324,7 @@ async function syncFeishuToImChannels(appId: string, appSecret: string) {
       label: 'Frogclaw',
       assignment: 'openclaw',
     });
-    await api.saveImChannels({ channels });
+    await api.saveImChannels({ channels, suppressedAppIds });
   }
 
   // 3. Write creds into agent config + platform root config
@@ -567,6 +575,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return getRecommendedGroupFromProviders(engine, systemProviders);
   }, [systemProviders]);
 
+  /**
+   * Mark a server-provided Feishu appId as dismissed so that
+   * syncFeishuToImChannels / IMChannelsView no longer auto-re-add it.
+   * Also removes the matching channel from im-channels.json and clears
+   * any cached feishuAppId state/localStorage so the UI doesn't keep
+   * showing the stale server badge.
+   */
+  const dismissFeishuAppId = useCallback(async (appId: string) => {
+    if (!appId) return;
+    try {
+      const data = await api.getImChannels().catch(() => normalizeImChannelsData());
+      const channels = data.channels.filter((ch) => ch.appId !== appId);
+      const suppressedAppIds = Array.from(new Set([...data.suppressedAppIds, appId]));
+      await api.saveImChannels({ channels, suppressedAppIds });
+    } catch (e) {
+      console.error('[Auth] dismissFeishuAppId: failed to update im-channels.json:', e);
+    }
+
+    if (feishuAppId === appId) {
+      setFeishuAppId(null);
+      localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
+    }
+  }, [feishuAppId]);
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -579,6 +611,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       feishuAppId,
       login,
       logout,
+      dismissFeishuAppId,
       selectToken,
       selectEngineToken,
       refreshProviders,

@@ -249,8 +249,8 @@ interface BotConnection {
   cardRenderer: CardRenderer;
   status: 'stopped' | 'starting' | 'running' | 'error';
   error: string | null;
-  /** Track recent chats so we can send notification cards on assignment switch. */
-  recentChats: Map<string, string>; // chatId → userId
+  /** Track recent private-chat users so we can proactively DM notifications. */
+  recentPrivateUsers: Set<string>; // open_id
 }
 
 const bots = new Map<string, BotConnection>();
@@ -373,51 +373,23 @@ function buildNotificationCard(title: string, color: string, body: string): stri
   });
 }
 
-async function sendNotificationCard(client: lark.Client, chatId: string, cardJson: string, userId?: string): Promise<void> {
-  // Try chat_id first, then open_id fallback
+async function sendPrivateNotificationCard(client: lark.Client, userId: string, cardJson: string): Promise<void> {
   try {
     await client.im.v1.message.create({
-      params: { receive_id_type: 'chat_id' },
-      data: { receive_id: chatId, content: cardJson, msg_type: 'interactive' },
+      params: { receive_id_type: 'open_id' },
+      data: { receive_id: userId, content: cardJson, msg_type: 'interactive' },
     });
-    return;
-  } catch {}
-  if (userId) {
-    try {
-      await client.im.v1.message.create({
-        params: { receive_id_type: 'open_id' },
-        data: { receive_id: userId, content: cardJson, msg_type: 'interactive' },
-      });
-    } catch {}
+  } catch (err: any) {
+    log('warn', `sendPrivateNotificationCard open_id=${userId.slice(0, 12)}: ${err.message?.slice(0, 120)}`);
   }
 }
 
-/**
- * Fetch all P2P chats the bot is in via Feishu API, then send a notification
- * card to each. Used when recentChats is empty (e.g. sidecar just started).
- */
-async function broadcastNotificationCard(client: lark.Client, cardJson: string): Promise<number> {
+async function notifyKnownPrivateUsers(client: lark.Client, userIds: Iterable<string>, cardJson: string): Promise<number> {
   let sent = 0;
-  try {
-    const resp = await (client as any).im.v1.chat.list({
-      params: { page_size: 50 },
-    });
-    const items = resp?.data?.items || [];
-    for (const chat of items) {
-      // Only send to P2P chats — group chats can be noisy
-      if (!chat.chat_id) continue;
-      try {
-        await client.im.v1.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: { receive_id: chat.chat_id, content: cardJson, msg_type: 'interactive' },
-        });
-        sent++;
-      } catch (e: any) {
-        log('warn', `broadcastNotificationCard chat=${chat.chat_id?.slice(0, 12)}: ${e.message?.slice(0, 80)}`);
-      }
-    }
-  } catch (e: any) {
-    log('warn', 'broadcastNotificationCard list chats failed:', e.message?.slice(0, 120));
+  for (const userId of userIds) {
+    if (!userId) continue;
+    await sendPrivateNotificationCard(client, userId, cardJson);
+    sent++;
   }
   return sent;
 }
@@ -534,8 +506,10 @@ function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
           `[${bot.appId.slice(0, 12)}] [${chatType}] ${userId.slice(0, 12)}: ${text.slice(0, 80)}${imageKey ? ' +img' : ''}${fileKey ? ' +file' : ''}`,
         );
 
-        // Track recent chats for notification cards on assignment switch
-        bot.recentChats.set(chatId, userId);
+        // Track recent private-chat users for proactive notification cards
+        if (chatType === 'p2p') {
+          bot.recentPrivateUsers.add(userId);
+        }
 
         // ─── Unassigned bot: reply with "未分配" message ─────────────
         if (bot.assignment === 'none' || !bot.agentManager) {
@@ -684,7 +658,7 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
     cardRenderer,
     status: 'starting',
     error: null,
-    recentChats: new Map(),
+    recentPrivateUsers: new Set(),
   };
 
   // Fetch bot's own open_id for group-chat @mention matching
@@ -730,9 +704,9 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
         color,
         body,
       );
-      broadcastNotificationCard(larkClient, card).then((n) =>
-        log('info', `[${appId.slice(0, 12)}] startup notification sent to ${n} chats`),
-      ).catch(() => {});
+      // Startup notifications are sent only to users who have messaged this bot before.
+      const sent = await notifyKnownPrivateUsers(larkClient, bot.recentPrivateUsers, card);
+      log('info', `[${appId.slice(0, 12)}] startup notification sent to ${sent} known users`);
     }
   } catch (err: any) {
     bot.status = 'error';
@@ -811,8 +785,8 @@ async function _reconcileBotsInner(): Promise<void> {
         : newAssignment === 'openclaw' ? 'OpenClaw' : '';
 
       if (newAssignment === 'none') {
-        // Switched to unassigned → send farewell card to all recent chats
-        log('info', `[${ch.appId.slice(0, 12)}] switched to unassigned, sending farewell cards`);
+        // Switched to unassigned → notify known private-chat users
+        log('info', `[${ch.appId.slice(0, 12)}] switched to unassigned, notifying known private users`);
         const oldLabel = oldAssignment === 'claudecode' ? 'Claude Code'
           : oldAssignment === 'openclaw' ? 'OpenClaw' : 'CLI';
         const card = buildNotificationCard(
@@ -820,13 +794,8 @@ async function _reconcileBotsInner(): Promise<void> {
           'red',
           `该机器人已断开 **${oldLabel}** 后端连接。\n\n如需继续使用，请在 Frog Code 应用中重新分配 CLI 后端。`,
         );
-        if (existing.recentChats.size > 0) {
-          for (const [chatId, uId] of existing.recentChats) {
-            await sendNotificationCard(existing.larkClient, chatId, card, uId);
-          }
-        } else {
-          await broadcastNotificationCard(existing.larkClient, card);
-        }
+        const sent = await notifyKnownPrivateUsers(existing.larkClient, existing.recentPrivateUsers, card);
+        log('info', `[${ch.appId.slice(0, 12)}] farewell notification sent to ${sent} known users`);
         // Detach agentManager but keep bot connected (so it can reply "未分配")
         if (existing.agentManager) {
           try { await existing.agentManager.detach(); } catch {}
@@ -864,16 +833,8 @@ async function _reconcileBotsInner(): Promise<void> {
           'green',
           `该机器人已成功连接 **${agentLabel}** 后端。\n\n现在可以直接发送消息开始 AI 对话。`,
         );
-        if (existing.recentChats.size > 0) {
-          for (const [chatId, uId] of existing.recentChats) {
-            await sendNotificationCard(existing.larkClient, chatId, card, uId);
-          }
-        } else {
-          // No recent chats — fetch bot's P2P chat list from Feishu API and send
-          log('info', `[${ch.appId.slice(0, 12)}] no recent chats, fetching chat list to send notification`);
-          const sent = await broadcastNotificationCard(existing.larkClient, card);
-          log('info', `[${ch.appId.slice(0, 12)}] notification card sent to ${sent} P2P chats`);
-        }
+        const sent = await notifyKnownPrivateUsers(existing.larkClient, existing.recentPrivateUsers, card);
+        log('info', `[${ch.appId.slice(0, 12)}] success notification sent to ${sent} known users`);
 
         log('info', `[${ch.appId.slice(0, 12)}] now assigned to ${newAssignment}`);
         emitStatus();

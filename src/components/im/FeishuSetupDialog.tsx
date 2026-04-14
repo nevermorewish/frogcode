@@ -64,9 +64,16 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
     }
     setSaving(true);
     try {
-      // Load existing channels
-      const data = await api.getImChannels().catch(() => ({ channels: [] as IMChannelConfig[] }));
-      const channels: IMChannelConfig[] = data.channels || [];
+      // Load existing channels (normalized — always has channels + suppressedAppIds)
+      const data = await api.getImChannels().catch(() => ({
+        channels: [] as IMChannelConfig[],
+        suppressedAppIds: [] as string[],
+      }));
+      const channels: IMChannelConfig[] = [...data.channels];
+
+      // If the user had previously dismissed this appId, clear the
+      // suppression — they're explicitly re-adding it now.
+      const suppressedAppIds = data.suppressedAppIds.filter(id => id !== trimmedId);
 
       // Check if appId already exists
       const existing = channels.find(ch => ch.appId === trimmedId);
@@ -96,7 +103,7 @@ export const FeishuSetupDialog: React.FC<FeishuSetupDialogProps> = ({
         }
       }
 
-      await api.saveImChannels({ channels });
+      await api.saveImChannels({ channels, suppressedAppIds });
 
       // Reset form
       setAppId('');

@@ -72,9 +72,10 @@ const AGENT_OPTIONS: { value: AgentAssignment; label: string; icon: React.ReactN
 export const IMChannelsView: React.FC = () => {
   const { t } = useTranslation();
   const bridge = usePlatformStatus();
-  const { feishuAppId: serverFeishuAppId } = useAuth();
+  const { feishuAppId: serverFeishuAppId, dismissFeishuAppId } = useAuth();
 
   const [channels, setChannels] = useState<IMChannelConfig[]>([]);
+  const [suppressedAppIds, setSuppressedAppIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState<string | null>(null);
   const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
@@ -86,10 +87,17 @@ export const IMChannelsView: React.FC = () => {
     setLoading(true);
     try {
       const data = await api.getImChannels();
-      let list = data.channels || [];
+      const list = [...data.channels];
+      const suppressed = data.suppressedAppIds;
 
-      // Merge server feishu appId if not already present
-      if (serverFeishuAppId && !list.some(ch => ch.appId === serverFeishuAppId)) {
+      // Merge server feishu appId if not already present AND not dismissed.
+      // Without the suppression check, the deleted channel would reappear
+      // on every reload because the server keeps advertising it.
+      if (
+        serverFeishuAppId &&
+        !list.some(ch => ch.appId === serverFeishuAppId) &&
+        !suppressed.includes(serverFeishuAppId)
+      ) {
         list.push({
           id: `server-${serverFeishuAppId}`,
           platform: 'feishu',
@@ -98,13 +106,15 @@ export const IMChannelsView: React.FC = () => {
           label: '',
           assignment: 'none',
         });
-        // Auto-save the merged entry
-        await api.saveImChannels({ channels: list });
+        // Auto-save the merged entry (preserve suppressedAppIds!)
+        await api.saveImChannels({ channels: list, suppressedAppIds: suppressed });
       }
 
       setChannels(list);
+      setSuppressedAppIds(suppressed);
     } catch {
       setChannels([]);
+      setSuppressedAppIds([]);
     } finally {
       setLoading(false);
     }
@@ -120,10 +130,15 @@ export const IMChannelsView: React.FC = () => {
     return () => document.removeEventListener('click', handler);
   }, [agentDropdownId]);
 
-  const saveAndApply = async (updated: IMChannelConfig[]) => {
-    // Save to im-channels.json — the sidecar reads this directly
-    await api.saveImChannels({ channels: updated });
+  const saveAndApply = async (
+    updated: IMChannelConfig[],
+    nextSuppressed: string[] = suppressedAppIds,
+  ) => {
+    // Save to im-channels.json — the sidecar reads this directly.
+    // Always include suppressedAppIds so the normalizer doesn't drop them.
+    await api.saveImChannels({ channels: updated, suppressedAppIds: nextSuppressed });
     setChannels(updated);
+    setSuppressedAppIds(nextSuppressed);
 
     const hasAnyAssigned = updated.some(ch => ch.assignment !== 'none');
 
@@ -175,9 +190,20 @@ export const IMChannelsView: React.FC = () => {
   };
 
   const handleDelete = async (channelId: string) => {
+    const channel = channels.find(ch => ch.id === channelId);
+    if (!channel) return;
     const updated = channels.filter(ch => ch.id !== channelId);
+    // Suppress so that loadChannels / syncFeishuToImChannels /
+    // migrateFromAgentConfigs don't re-add this appId on the next tick.
+    const nextSuppressed = Array.from(new Set([...suppressedAppIds, channel.appId]));
     try {
-      await saveAndApply(updated);
+      await saveAndApply(updated, nextSuppressed);
+      // If this was the server-provided feishu channel, also clear the
+      // cached appId from AuthContext so the badge/UI doesn't keep
+      // showing it as "available from server".
+      if (channel.appId === serverFeishuAppId) {
+        await dismissFeishuAppId(channel.appId);
+      }
     } catch {
       // ignore
     }
@@ -191,8 +217,12 @@ export const IMChannelsView: React.FC = () => {
 
   // One-time migration: pull feishu creds from agent configs into im-channels.json
   const migrateFromAgentConfigs = async () => {
-    const data = await api.getImChannels().catch(() => ({ channels: [] as IMChannelConfig[] }));
-    const list = data.channels || [];
+    const data = await api.getImChannels().catch(() => ({
+      channels: [] as IMChannelConfig[],
+      suppressedAppIds: [] as string[],
+    }));
+    const list = [...data.channels];
+    const suppressed = data.suppressedAppIds;
     const seen = new Set(list.map(ch => ch.appId));
     let changed = false;
 
@@ -202,7 +232,8 @@ export const IMChannelsView: React.FC = () => {
     for (const agentType of ['claudecode', 'openclaw'] as const) {
       const cfg = await api.platform.getAgentConfig(agentType).catch(() => ({})) as any;
       const appId = cfg?.feishu?.appId;
-      if (appId && !seen.has(appId)) {
+      // Skip if already tracked OR user explicitly deleted it
+      if (appId && !seen.has(appId) && !suppressed.includes(appId)) {
         list.push({
           id: `${agentType}-${appId}`,
           platform: 'feishu',
@@ -217,7 +248,7 @@ export const IMChannelsView: React.FC = () => {
     }
 
     if (changed) {
-      await api.saveImChannels({ channels: list });
+      await api.saveImChannels({ channels: list, suppressedAppIds: suppressed });
     }
   };
 

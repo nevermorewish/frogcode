@@ -405,7 +405,7 @@ async function broadcastNotificationCard(client: lark.Client, cardJson: string):
     const items = resp?.data?.items || [];
     for (const chat of items) {
       // Only send to P2P chats — group chats can be noisy
-      if (chat.chat_type !== 'p2p' || !chat.chat_id) continue;
+      if (!chat.chat_id) continue;
       try {
         await client.im.v1.message.create({
           params: { receive_id_type: 'chat_id' },

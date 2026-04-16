@@ -732,6 +732,8 @@ export interface IMChannelConfig {
   appSecret: string;
   label: string;
   assignment: 'claudecode' | 'openclaw' | 'none';
+  /** QQ Bot only: use sandbox API */
+  sandbox?: boolean;
 }
 
 export interface IMChannelsData {
@@ -4252,6 +4254,30 @@ export const api = {
 
     async connectFeishu(): Promise<boolean> {
       return await invoke("platform_connect_feishu");
+    },
+
+    /** Start a WeChat QR login flow. Returns sessionKey + QR URL to render. */
+    async wechatQrStart(): Promise<{ ok: boolean; sessionKey?: string; qrUrl?: string; error?: string }> {
+      return await invoke("platform_wechat_qr_start");
+    },
+
+    /** Wait for WeChat QR to be scanned and confirmed. Long-polls up to ~9 minutes. */
+    async wechatQrWait(sessionKey: string): Promise<{
+      ok: boolean;
+      confirmed: boolean;
+      botToken?: string;
+      ilinkBotId?: string;
+      ilinkUserId?: string;
+      baseUrl?: string;
+      qrUrl?: string;
+      error?: string;
+    }> {
+      return await invoke("platform_wechat_qr_wait", { sessionKey });
+    },
+
+    /** Cancel a pending QR login flow. */
+    async wechatQrCancel(sessionKey: string): Promise<{ ok: boolean }> {
+      return await invoke("platform_wechat_qr_cancel", { sessionKey });
     },
 
     /** Hot-reload config from disk, re-init agent if type changed, reconnect Feishu.

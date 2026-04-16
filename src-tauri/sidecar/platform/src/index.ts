@@ -41,12 +41,15 @@ import * as fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import * as lark from '@larksuiteoapi/node-sdk';
 
-import type { Agent, AgentType } from './agents/types.js';
+import type { Agent, AgentType, AgentEvent } from './agents/types.js';
 import { AgentManager } from './agents/manager.js';
 import { ClaudeCodeAgent } from './agents/claudecode.js';
 import { OpenClawAgent, type OpenClawStatus } from './agents/openclaw/index.js';
 import { listSessions as ocListSessions, getSession as ocGetSession } from './agents/openclaw/sessions.js';
 import { CardRenderer } from './card-renderer.js';
+import { QQBotClient, type QQMessage, type QQReplyContext } from './qq-bot.js';
+import { WeChatBotClient, type WeChatInboundMessage } from './wechat-bot.js';
+import { startQrLogin, waitQrLogin, cancelQrLogin } from './wechat-qr-session.js';
 
 // ============================================================================
 // CLI args
@@ -92,6 +95,8 @@ interface IMChannelConfig {
   appSecret: string;
   label: string;
   assignment: AgentType | 'none';
+  /** QQ Bot only: use sandbox API */
+  sandbox?: boolean;
 }
 
 // Platform config (read from platform-config.json) — for projectPath only
@@ -254,6 +259,50 @@ interface BotConnection {
 }
 
 const bots = new Map<string, BotConnection>();
+
+// ============================================================================
+// QQBotConnection — one per QQ bot
+// ============================================================================
+
+interface QQBotConnection {
+  appId: string;
+  appSecret: string;
+  assignment: AgentType | 'none';
+  label: string;
+  sandbox: boolean;
+  client: QQBotClient;
+  agentManager: AgentManager | null;
+  status: 'stopped' | 'starting' | 'running' | 'error';
+  error: string | null;
+  /** Per-session-key reply context so agent events can be routed back to QQ. */
+  replyCtxBySession: Map<string, QQReplyContext>;
+  /** Per-session accumulated response text for streaming replies. */
+  responseBySession: Map<string, string>;
+  /** Per-session in-flight flag so a second user message doesn't overlap. */
+  activeBySession: Set<string>;
+}
+
+const qqBots = new Map<string, QQBotConnection>();
+
+// ============================================================================
+// WeChatConnection — singleton (one personal WeChat account at a time)
+// ============================================================================
+
+interface WeChatConnection {
+  ilinkBotId: string;
+  token: string;
+  assignment: AgentType | 'none';
+  label: string;
+  client: WeChatBotClient;
+  agentManager: AgentManager | null;
+  status: 'stopped' | 'starting' | 'running' | 'error';
+  error: string | null;
+  replyCtxBySession: Map<string, string>;  // sessionKey → peerUserId
+  responseBySession: Map<string, string>;
+  activeBySession: Set<string>;
+}
+
+let wechatBot: WeChatConnection | null = null;
 
 // ============================================================================
 // Media temp dir
@@ -764,13 +813,50 @@ async function reconcileBots(): Promise<void> {
 }
 async function _reconcileBotsInner(): Promise<void> {
   const channels = loadChannelsFromDisk();
-  const desiredAppIds = new Set<string>();
+  const desiredFeishuAppIds = new Set<string>();
+  const desiredQQAppIds = new Set<string>();
+  let desiredWeChatId: string | null = null;
   const projectPath = platformConfig?.projectPath || defaultProjectPath();
 
   for (const ch of channels) {
     if (!ch.appId || !ch.appSecret) continue;
 
-    desiredAppIds.add(ch.appId);
+    // ─── WeChat channel (singleton) ─────────────────────────────────────
+    if (ch.platform === 'wechat') {
+      desiredWeChatId = ch.appId;
+      if (!wechatBot || wechatBot.ilinkBotId !== ch.appId) {
+        if (wechatBot) await disconnectWeChat();
+        await connectWeChat(ch);
+      } else if (wechatBot.assignment !== ch.assignment) {
+        // Hot-swap assignment by reconnecting
+        log('info', `[wechat:${ch.appId.slice(0, 16)}] assignment changed, reconnecting`);
+        await disconnectWeChat();
+        await connectWeChat(ch);
+      } else {
+        wechatBot.label = ch.label;
+      }
+      continue;
+    }
+
+    // ─── QQ channel ─────────────────────────────────────────────────────
+    if (ch.platform === 'qq') {
+      desiredQQAppIds.add(ch.appId);
+      const existing = qqBots.get(ch.appId);
+      if (!existing) {
+        await connectQQBot(ch);
+      } else if (existing.assignment !== ch.assignment) {
+        // Hot-swap assignment by reconnecting
+        log('info', `[qq:${ch.appId.slice(0, 12)}] assignment changed, reconnecting`);
+        await disconnectQQBot(ch.appId);
+        await connectQQBot(ch);
+      } else {
+        existing.label = ch.label;
+      }
+      continue;
+    }
+
+    // ─── Feishu channel (default) ───────────────────────────────────────
+    desiredFeishuAppIds.add(ch.appId);
     const existing = bots.get(ch.appId);
 
     if (!existing) {
@@ -845,12 +931,409 @@ async function _reconcileBotsInner(): Promise<void> {
     }
   }
 
-  // Disconnect bots no longer in im-channels.json
+  // Disconnect Feishu bots no longer in im-channels.json
   for (const [appId] of bots) {
-    if (!desiredAppIds.has(appId)) {
+    if (!desiredFeishuAppIds.has(appId)) {
       log('info', `[${appId.slice(0, 12)}] removed from channels, disconnecting`);
       await disconnectBot(appId);
     }
+  }
+
+  // Disconnect QQ bots no longer in im-channels.json
+  for (const [appId] of qqBots) {
+    if (!desiredQQAppIds.has(appId)) {
+      log('info', `[qq:${appId.slice(0, 12)}] removed from channels, disconnecting`);
+      await disconnectQQBot(appId);
+    }
+  }
+
+  // Disconnect WeChat if no longer in im-channels.json
+  if (wechatBot && (!desiredWeChatId || wechatBot.ilinkBotId !== desiredWeChatId)) {
+    log('info', `[wechat:${wechatBot.ilinkBotId.slice(0, 16)}] removed from channels, disconnecting`);
+    await disconnectWeChat();
+  }
+}
+
+// ============================================================================
+// QQ Bot lifecycle
+// ============================================================================
+
+async function connectQQBot(channel: IMChannelConfig): Promise<QQBotConnection> {
+  const { appId, appSecret, assignment, label, sandbox } = channel;
+  log('info', `connectQQBot ${appId.slice(0, 12)} assignment=${assignment} label=${label}`);
+
+  const client = new QQBotClient({ appId, appSecret, sandbox: !!sandbox });
+
+  const qqBot: QQBotConnection = {
+    appId,
+    appSecret,
+    assignment: assignment as AgentType | 'none',
+    label,
+    sandbox: !!sandbox,
+    client,
+    agentManager: null,
+    status: 'starting',
+    error: null,
+    replyCtxBySession: new Map(),
+    responseBySession: new Map(),
+    activeBySession: new Set(),
+  };
+
+  // Init agentManager if assigned
+  if (assignment !== 'none') {
+    const agent = createAgent(assignment as AgentType);
+    const agentManager = new AgentManager(agent);
+    qqBot.agentManager = agentManager;
+
+    // Wire agent events → accumulate text, then send on 'result'
+    agentManager.onEvent((_key, evt) => {
+      handleQQAgentEvent(qqBot, _key, evt);
+    });
+  }
+
+  // Wire QQ messages → agentManager
+  client.on('message', (msg: QQMessage) => {
+    handleQQMessage(qqBot, msg).catch(err => {
+      log('error', `[qq:${appId.slice(0, 12)}] message handler:`, err.message);
+    });
+  });
+
+  client.on('ready', () => {
+    qqBot.status = 'running';
+    qqBot.error = null;
+    log('info', `[qq:${appId.slice(0, 12)}] ready`);
+    emitStatus();
+  });
+
+  client.on('error', (err: Error) => {
+    qqBot.status = 'error';
+    qqBot.error = err.message;
+    log('error', `[qq:${appId.slice(0, 12)}] error:`, err.message);
+    emitStatus();
+  });
+
+  client.on('status', (s: string) => {
+    if (s === 'running') {
+      qqBot.status = 'running';
+      qqBot.error = null;
+    } else if (s === 'reconnecting') {
+      qqBot.status = 'starting';
+    }
+    emitStatus();
+  });
+
+  // Connect
+  try {
+    await client.start();
+    qqBot.status = 'running';
+    log('info', `[qq:${appId.slice(0, 12)}] connected`);
+  } catch (err: any) {
+    qqBot.status = 'error';
+    qqBot.error = err.message;
+    log('error', `[qq:${appId.slice(0, 12)}] connect failed:`, err.message);
+  }
+
+  qqBots.set(appId, qqBot);
+  emitStatus();
+  return qqBot;
+}
+
+async function disconnectQQBot(appId: string): Promise<void> {
+  const qqBot = qqBots.get(appId);
+  if (!qqBot) return;
+  log('info', `disconnectQQBot ${appId.slice(0, 12)}`);
+
+  if (qqBot.agentManager) {
+    try { await qqBot.agentManager.detach(); } catch {}
+    qqBot.agentManager = null;
+  }
+
+  try { await qqBot.client.stop(); } catch {}
+
+  qqBot.status = 'stopped';
+  qqBot.error = null;
+  qqBots.delete(appId);
+  emitStatus();
+}
+
+/** Handle incoming QQ message → route to agent. */
+async function handleQQMessage(qqBot: QQBotConnection, msg: QQMessage): Promise<void> {
+  const { appId, agentManager, client } = qqBot;
+
+  if (!msg.text && msg.imagePaths.length === 0) return;
+
+  log('info', `[qq:${appId.slice(0, 12)}] [${msg.replyCtx.messageType}] ${msg.senderName}: ${msg.text.slice(0, 80)}`);
+
+  // Unassigned bot
+  if (qqBot.assignment === 'none' || !agentManager) {
+    await client.sendText(msg.replyCtx, '该机器人还未分配CLI后端，请在 Frog Code 应用中为此通道分配 Claude Code 或 OpenClaw。');
+    return;
+  }
+
+  // Session key: qq:{groupOpenId_or_userOpenId}:{userOpenId}
+  const channelId = msg.replyCtx.groupOpenId || msg.replyCtx.userOpenId;
+  const sessionKey = `qq:${channelId}:${msg.replyCtx.userOpenId}`;
+
+  // Slash commands
+  const lower = msg.text.toLowerCase();
+  if (lower === '/new' || lower === '/reset') {
+    await agentManager.reset(sessionKey);
+    await client.sendText(msg.replyCtx, '\u2705 会话已重置，下次消息将开始新对话。');
+    return;
+  }
+  if (lower === '/stop') {
+    await agentManager.cancel(sessionKey);
+    await client.sendText(msg.replyCtx, '\u23F9 已请求停止当前任务。');
+    return;
+  }
+  if (lower === '/status') {
+    const lines = [
+      `Bot: ${appId.slice(0, 16)}... ${qqBot.label ? `(${qqBot.label})` : ''}`,
+      `Agent: ${agentManager.agentName}`,
+      `Project: ${platformConfig?.projectPath || 'N/A'}`,
+      `Status: ${qqBot.status}`,
+    ];
+    await client.sendText(msg.replyCtx, lines.join('\n'));
+    return;
+  }
+
+  // Check if session is busy
+  if (qqBot.activeBySession.has(sessionKey)) {
+    await client.sendText(msg.replyCtx, '\u23F3 当前有任务正在执行，请等待完成后再发送新消息。');
+    return;
+  }
+
+  // Pre-flight check for openclaw
+  if (agentManager.agentName === 'openclaw') {
+    try {
+      const ocStatus = getOpenClawAgent().status();
+      if (!ocStatus.started || !ocStatus.processAlive) {
+        await client.sendText(msg.replyCtx, '\u26A0\uFE0F OpenClaw 网关未启动，请先在应用中启动 OpenClaw 后再发送消息。');
+        return;
+      }
+    } catch {}
+  }
+
+  // Mark session active and store reply context
+  qqBot.activeBySession.add(sessionKey);
+  qqBot.replyCtxBySession.set(sessionKey, msg.replyCtx);
+  qqBot.responseBySession.set(sessionKey, '');
+
+  try {
+    await agentManager.handle({
+      platform: 'qq',
+      channelId,
+      userId: msg.replyCtx.userOpenId,
+      cwd: platformConfig?.projectPath || '',
+      prompt: msg.text,
+      files: msg.imagePaths,
+    });
+  } catch (err: any) {
+    log('error', `[qq:${appId.slice(0, 12)}] agentManager.handle:`, err.message);
+    await client.sendText(msg.replyCtx, `\u274C 错误: ${err.message?.slice(0, 200)}`).catch(() => {});
+    qqBot.activeBySession.delete(sessionKey);
+    qqBot.replyCtxBySession.delete(sessionKey);
+    qqBot.responseBySession.delete(sessionKey);
+  }
+}
+
+/** Handle agent events → accumulate text, send on result. */
+function handleQQAgentEvent(qqBot: QQBotConnection, sessionKey: string, evt: AgentEvent): void {
+  const ctx = qqBot.replyCtxBySession.get(sessionKey);
+  if (!ctx) return;
+
+  if (evt.type === 'text') {
+    const current = qqBot.responseBySession.get(sessionKey) || '';
+    qqBot.responseBySession.set(sessionKey, current + evt.delta);
+  } else if (evt.type === 'result') {
+    // Turn complete — send accumulated text
+    const response = qqBot.responseBySession.get(sessionKey) || '';
+    const errorMsg = evt.error ? `\u274C 错误: ${evt.error}` : '';
+    const finalText = response || errorMsg || '(空回复)';
+
+    qqBot.client.sendText(ctx, finalText).catch(err => {
+      log('error', `[qq:${qqBot.appId.slice(0, 12)}] sendText:`, err.message);
+    }).finally(() => {
+      qqBot.activeBySession.delete(sessionKey);
+      qqBot.replyCtxBySession.delete(sessionKey);
+      qqBot.responseBySession.delete(sessionKey);
+    });
+  }
+}
+
+// ============================================================================
+// WeChat lifecycle (singleton)
+// ============================================================================
+
+async function connectWeChat(channel: IMChannelConfig): Promise<WeChatConnection> {
+  const ilinkBotId = channel.appId;
+  const token = channel.appSecret;
+  const { assignment, label } = channel;
+  log('info', `connectWeChat ${ilinkBotId.slice(0, 16)} assignment=${assignment}`);
+
+  const client = new WeChatBotClient({ ilinkBotId, token });
+
+  const conn: WeChatConnection = {
+    ilinkBotId,
+    token,
+    assignment: assignment as AgentType | 'none',
+    label,
+    client,
+    agentManager: null,
+    status: 'starting',
+    error: null,
+    replyCtxBySession: new Map(),
+    responseBySession: new Map(),
+    activeBySession: new Set(),
+  };
+
+  // Init agentManager if assigned
+  if (assignment !== 'none') {
+    const agent = createAgent(assignment as AgentType);
+    const agentManager = new AgentManager(agent);
+    conn.agentManager = agentManager;
+    agentManager.onEvent((_key, evt) => {
+      handleWeChatAgentEvent(conn, _key, evt);
+    });
+  }
+
+  // Wire WeChat messages → agentManager
+  client.on('message', (msg: WeChatInboundMessage) => {
+    handleWeChatMessage(conn, msg).catch(err => {
+      log('error', `[wechat:${ilinkBotId.slice(0, 16)}] message handler:`, err.message);
+    });
+  });
+
+  client.on('error', (err: Error) => {
+    conn.status = 'error';
+    conn.error = err.message;
+    log('error', `[wechat:${ilinkBotId.slice(0, 16)}] error:`, err.message);
+    emitStatus();
+  });
+
+  try {
+    await client.start();
+    conn.status = 'running';
+    log('info', `[wechat:${ilinkBotId.slice(0, 16)}] started`);
+  } catch (err: any) {
+    conn.status = 'error';
+    conn.error = err.message;
+    log('error', `[wechat:${ilinkBotId.slice(0, 16)}] start failed:`, err.message);
+  }
+
+  wechatBot = conn;
+  emitStatus();
+  return conn;
+}
+
+async function disconnectWeChat(): Promise<void> {
+  if (!wechatBot) return;
+  const id = wechatBot.ilinkBotId;
+  log('info', `disconnectWeChat ${id.slice(0, 16)}`);
+
+  if (wechatBot.agentManager) {
+    try { await wechatBot.agentManager.detach(); } catch {}
+    wechatBot.agentManager = null;
+  }
+  try { await wechatBot.client.stop(); } catch {}
+
+  wechatBot = null;
+  emitStatus();
+}
+
+async function handleWeChatMessage(conn: WeChatConnection, msg: WeChatInboundMessage): Promise<void> {
+  const { agentManager, client, ilinkBotId } = conn;
+  if (!msg.text && msg.imagePaths.length === 0 && msg.filePaths.length === 0) return;
+
+  log('info', `[wechat:${ilinkBotId.slice(0, 16)}] ${msg.fromUserId.slice(0, 16)}: ${msg.text.slice(0, 80)}`);
+
+  if (conn.assignment === 'none' || !agentManager) {
+    await client.sendText(msg.fromUserId, '该账号还未分配CLI后端，请在 Frog Code 应用中为此通道分配 Claude Code 或 OpenClaw。');
+    return;
+  }
+
+  const sessionKey = `wechat:${ilinkBotId}:${msg.fromUserId}`;
+
+  const lower = msg.text.toLowerCase();
+  if (lower === '/new' || lower === '/reset') {
+    await agentManager.reset(sessionKey);
+    await client.sendText(msg.fromUserId, '\u2705 会话已重置，下次消息将开始新对话。');
+    return;
+  }
+  if (lower === '/stop') {
+    await agentManager.cancel(sessionKey);
+    await client.sendText(msg.fromUserId, '\u23F9 已请求停止当前任务。');
+    return;
+  }
+  if (lower === '/status') {
+    const lines = [
+      `Bot: ${ilinkBotId.slice(0, 16)}...`,
+      `Agent: ${agentManager.agentName}`,
+      `Project: ${platformConfig?.projectPath || 'N/A'}`,
+      `Status: ${conn.status}`,
+    ];
+    await client.sendText(msg.fromUserId, lines.join('\n'));
+    return;
+  }
+
+  if (conn.activeBySession.has(sessionKey)) {
+    await client.sendText(msg.fromUserId, '\u23F3 当前有任务正在执行，请等待完成后再发送新消息。');
+    return;
+  }
+
+  if (agentManager.agentName === 'openclaw') {
+    try {
+      const ocStatus = getOpenClawAgent().status();
+      if (!ocStatus.started || !ocStatus.processAlive) {
+        await client.sendText(msg.fromUserId, '\u26A0\uFE0F OpenClaw 网关未启动。');
+        return;
+      }
+    } catch {}
+  }
+
+  const allFiles = [...msg.imagePaths, ...msg.filePaths];
+
+  conn.activeBySession.add(sessionKey);
+  conn.replyCtxBySession.set(sessionKey, msg.fromUserId);
+  conn.responseBySession.set(sessionKey, '');
+
+  try {
+    await agentManager.handle({
+      platform: 'wechat',
+      channelId: ilinkBotId,
+      userId: msg.fromUserId,
+      cwd: platformConfig?.projectPath || '',
+      prompt: msg.text || '请分析附件',
+      files: allFiles,
+    });
+  } catch (err: any) {
+    log('error', `[wechat:${ilinkBotId.slice(0, 16)}] agentManager.handle:`, err.message);
+    await client.sendText(msg.fromUserId, `\u274C 错误: ${err.message?.slice(0, 200)}`).catch(() => {});
+    conn.activeBySession.delete(sessionKey);
+    conn.replyCtxBySession.delete(sessionKey);
+    conn.responseBySession.delete(sessionKey);
+  }
+}
+
+function handleWeChatAgentEvent(conn: WeChatConnection, sessionKey: string, evt: AgentEvent): void {
+  const peerId = conn.replyCtxBySession.get(sessionKey);
+  if (!peerId) return;
+
+  if (evt.type === 'text') {
+    const current = conn.responseBySession.get(sessionKey) || '';
+    conn.responseBySession.set(sessionKey, current + evt.delta);
+  } else if (evt.type === 'result') {
+    const response = conn.responseBySession.get(sessionKey) || '';
+    const errorMsg = evt.error ? `\u274C 错误: ${evt.error}` : '';
+    const finalText = response || errorMsg || '(空回复)';
+
+    conn.client.sendText(peerId, finalText).catch(err => {
+      log('error', `[wechat:${conn.ilinkBotId.slice(0, 16)}] sendText:`, err.message);
+    }).finally(() => {
+      conn.activeBySession.delete(sessionKey);
+      conn.replyCtxBySession.delete(sessionKey);
+      conn.responseBySession.delete(sessionKey);
+    });
   }
 }
 
@@ -863,6 +1346,7 @@ function emitStatus() {
   for (const [appId, bot] of bots) {
     botStatuses.push({
       appId,
+      platform: 'feishu',
       label: bot.label,
       assignment: bot.assignment,
       status: bot.status,
@@ -870,20 +1354,42 @@ function emitStatus() {
       agent: bot.agentManager?.agentName ?? null,
     });
   }
+  for (const [appId, qqBot] of qqBots) {
+    botStatuses.push({
+      appId,
+      platform: 'qq',
+      label: qqBot.label,
+      assignment: qqBot.assignment,
+      status: qqBot.status,
+      error: qqBot.error,
+      agent: qqBot.agentManager?.agentName ?? null,
+    });
+  }
+  if (wechatBot) {
+    botStatuses.push({
+      appId: wechatBot.ilinkBotId,
+      platform: 'wechat',
+      label: wechatBot.label,
+      assignment: wechatBot.assignment,
+      status: wechatBot.status,
+      error: wechatBot.error,
+      agent: wechatBot.agentManager?.agentName ?? null,
+    });
+  }
 
   bus.emit('event', {
     type: 'status',
     // Backward compat: report first running bot's status as the "feishu" status
     feishu: {
-      status: botStatuses.find((b) => b.status === 'running')
+      status: botStatuses.filter(b => b.platform === 'feishu').find((b) => b.status === 'running')
         ? 'running'
-        : botStatuses.find((b) => b.status === 'starting')
+        : botStatuses.filter(b => b.platform === 'feishu').find((b) => b.status === 'starting')
           ? 'starting'
-          : botStatuses.find((b) => b.status === 'error')
+          : botStatuses.filter(b => b.platform === 'feishu').find((b) => b.status === 'error')
             ? 'error'
             : 'stopped',
-      error: botStatuses.find((b) => b.error)?.error ?? null,
-      appId: botStatuses.find((b) => b.status === 'running')?.appId ?? null,
+      error: botStatuses.filter(b => b.platform === 'feishu').find((b) => b.error)?.error ?? null,
+      appId: botStatuses.filter(b => b.platform === 'feishu').find((b) => b.status === 'running')?.appId ?? null,
     },
     bots: botStatuses,
     agent: botStatuses.find((b) => b.agent)?.agent ?? null,
@@ -951,6 +1457,7 @@ const server = http.createServer(async (req, res) => {
       for (const [appId, bot] of bots) {
         botStatuses.push({
           appId,
+          platform: 'feishu',
           label: bot.label,
           assignment: bot.assignment,
           status: bot.status,
@@ -958,19 +1465,42 @@ const server = http.createServer(async (req, res) => {
           agent: bot.agentManager?.agentName ?? null,
         });
       }
+      for (const [appId, qqBot] of qqBots) {
+        botStatuses.push({
+          appId,
+          platform: 'qq',
+          label: qqBot.label,
+          assignment: qqBot.assignment,
+          status: qqBot.status,
+          error: qqBot.error,
+          agent: qqBot.agentManager?.agentName ?? null,
+        });
+      }
+      if (wechatBot) {
+        botStatuses.push({
+          appId: wechatBot.ilinkBotId,
+          platform: 'wechat',
+          label: wechatBot.label,
+          assignment: wechatBot.assignment,
+          status: wechatBot.status,
+          error: wechatBot.error,
+          agent: wechatBot.agentManager?.agentName ?? null,
+        });
+      }
+      const feishuBots = botStatuses.filter(b => b.platform === 'feishu');
       return sendJson(res, 200, {
         ok: true,
         uptimeMs: Date.now() - startedAt,
         bots: botStatuses,
         // Backward compat
         feishu: {
-          status: botStatuses.find((b) => b.status === 'running')
+          status: feishuBots.find((b) => b.status === 'running')
             ? 'running'
-            : botStatuses.find((b) => b.status === 'error')
+            : feishuBots.find((b) => b.status === 'error')
               ? 'error'
               : 'stopped',
-          error: botStatuses.find((b) => b.error)?.error ?? null,
-          appId: botStatuses.find((b) => b.status === 'running')?.appId ?? null,
+          error: feishuBots.find((b) => b.error)?.error ?? null,
+          appId: feishuBots.find((b) => b.status === 'running')?.appId ?? null,
         },
         agent: botStatuses.find((b) => b.agent)?.agent ?? null,
       });
@@ -1028,8 +1558,45 @@ const server = http.createServer(async (req, res) => {
       for (const [appId] of bots) {
         await disconnectBot(appId);
       }
+      for (const [appId] of qqBots) {
+        await disconnectQQBot(appId);
+      }
+      if (wechatBot) await disconnectWeChat();
       emitStatus();
       return sendJson(res, 200, { ok: true });
+    }
+
+    // ─── WeChat QR login ────────────────────────────────────────────────
+    if (m === 'POST' && p === '/wechat/qr/start') {
+      try {
+        const result = await startQrLogin();
+        return sendJson(res, 200, { ok: true, ...result });
+      } catch (e: any) {
+        return sendJson(res, 500, { ok: false, error: e.message });
+      }
+    }
+    if (m === 'POST' && p === '/wechat/qr/wait') {
+      try {
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        const sessionKey = parsed.sessionKey;
+        if (!sessionKey) return sendJson(res, 400, { ok: false, error: 'sessionKey required' });
+        const result = await waitQrLogin(sessionKey);
+        return sendJson(res, 200, { ok: true, ...result });
+      } catch (e: any) {
+        return sendJson(res, 500, { ok: false, error: e.message });
+      }
+    }
+    if (m === 'POST' && p === '/wechat/qr/cancel') {
+      try {
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        const sessionKey = parsed.sessionKey;
+        const ok = sessionKey ? cancelQrLogin(sessionKey) : false;
+        return sendJson(res, 200, { ok });
+      } catch (e: any) {
+        return sendJson(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // ─── OpenClaw controls ──────────────────────────────────────────────
@@ -1146,6 +1713,10 @@ function shutdown(sig: string) {
     for (const [appId] of bots) {
       try { await disconnectBot(appId); } catch {}
     }
+    for (const [appId] of qqBots) {
+      try { await disconnectQQBot(appId); } catch {}
+    }
+    if (wechatBot) { try { await disconnectWeChat(); } catch {} }
     // Stop openclaw gateway if running
     try {
       if (openclawAgent) await openclawAgent.stopGateway();

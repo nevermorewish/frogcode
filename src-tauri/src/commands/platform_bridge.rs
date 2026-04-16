@@ -1035,3 +1035,79 @@ pub async fn platform_connect_feishu(
     }
     Ok(ok)
 }
+
+// ---------------------------------------------------------------------------
+// WeChat QR login proxy commands
+// ---------------------------------------------------------------------------
+
+async fn sidecar_post_json(
+    state: &tauri::State<'_, PlatformBridgeState>,
+    path: &str,
+    body: serde_json::Value,
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
+    let port = sidecar_port(state).await?;
+    let url = format!("http://127.0.0.1:{}{}", port, path);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| format!("http client build: {}", e))?;
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("http post: {}", e))?;
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("json parse: {}", e))
+}
+
+/// Start a WeChat QR login flow. Ensures sidecar is running; returns {sessionKey, qrUrl}.
+#[tauri::command]
+pub async fn platform_wechat_qr_start(
+    state: tauri::State<'_, PlatformBridgeState>,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    // Ensure sidecar is running first
+    {
+        let g = state.inner.lock().await;
+        let running = g.status == BridgeStatus::Running && g.port.is_some();
+        drop(g);
+        if !running {
+            platform_start(state.clone(), app).await?;
+        }
+    }
+    sidecar_post_json(&state, "/wechat/qr/start", serde_json::json!({}), 30).await
+}
+
+/// Wait for QR login to complete (long-poll, up to ~9 min).
+/// Returns {confirmed, botToken?, ilinkBotId?, ilinkUserId?, baseUrl?, error?, qrUrl?}.
+#[tauri::command]
+pub async fn platform_wechat_qr_wait(
+    state: tauri::State<'_, PlatformBridgeState>,
+    session_key: String,
+) -> Result<serde_json::Value, String> {
+    sidecar_post_json(
+        &state,
+        "/wechat/qr/wait",
+        serde_json::json!({ "sessionKey": session_key }),
+        9 * 60,
+    )
+    .await
+}
+
+/// Cancel a pending QR login flow.
+#[tauri::command]
+pub async fn platform_wechat_qr_cancel(
+    state: tauri::State<'_, PlatformBridgeState>,
+    session_key: String,
+) -> Result<serde_json::Value, String> {
+    sidecar_post_json(
+        &state,
+        "/wechat/qr/cancel",
+        serde_json::json!({ "sessionKey": session_key }),
+        10,
+    )
+    .await
+}

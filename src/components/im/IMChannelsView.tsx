@@ -15,10 +15,18 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { api, type IMChannelConfig } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePlatformStatus } from '@/hooks/usePlatformStatus';
 import { FeishuSetupDialog } from './FeishuSetupDialog';
+import { QQSetupDialog } from './QQSetupDialog';
+import { WeChatSetupDialog } from './WeChatSetupDialog';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +38,23 @@ const FeishuIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg viewBox="0 0 48 48" className={className} xmlns="http://www.w3.org/2000/svg">
     <path fill="#00D6B9" d="M32.5 12C38 12 42 16 42 21.5V36c0 .5-.6.8-1 .5-6.3-4.8-11.3-8-17-8-3.2 0-6 .7-9 2.2-.4.2-.8-.1-.8-.5V21.5C14.2 16 18.2 12 23.7 12h8.8z" />
     <path fill="#3370FF" d="M6 22.8c0-.5.6-.8 1-.5 4.8 3.6 9.3 7 14.5 9.7 4.8 2.4 9.5 3 14.7 2.5.5 0 .8.4.6.8-2.5 4.3-7.2 7.2-12.5 7.2-3 0-5.8-.9-8.2-2.4C10.2 37 6 31.4 6 24.8v-2z" />
+  </svg>
+);
+
+const QQIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path fill="#12B7F5" d="M24 4C15.2 4 10 10.5 10 18.5c0 2.6.5 5 1.4 7-.9 1.4-2.4 4-2.4 5.5 0 1 .6 1.2 1.4.6l2.3-1.9c1 1 2.4 2 4 2.7-.5 1-1 2-1 3 0 2.4 1.8 3.6 5.5 3.6h5.6c3.7 0 5.5-1.2 5.5-3.6 0-1-.5-2-1-3 1.6-.7 3-1.7 4-2.7l2.3 1.9c.8.6 1.4.4 1.4-.6 0-1.5-1.5-4.1-2.4-5.5.9-2 1.4-4.4 1.4-7C38 10.5 32.8 4 24 4z" />
+    <circle fill="white" cx="18" cy="18" r="3" />
+    <circle fill="white" cx="30" cy="18" r="3" />
+    <circle fill="#12B7F5" cx="18" cy="18" r="1.5" />
+    <circle fill="#12B7F5" cx="30" cy="18" r="1.5" />
+  </svg>
+);
+
+const WeChatIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path fill="#07C160" d="M18 8C10 8 4 14 4 22c0 4.3 2 8 5 10.7L8 37l4.8-2.2c1.7.5 3.4.8 5.2.8 1 0 2-.1 2.9-.3-.5-1.2-.8-2.5-.8-3.8 0-6.8 6.3-12 14-12 .7 0 1.4 0 2.1.2C35.6 14 27.6 8 18 8zm-5 10.5a2 2 0 110-4 2 2 0 010 4zm10 0a2 2 0 110-4 2 2 0 010 4z" />
+    <path fill="#07C160" d="M44 32c0-5.5-5.4-10-12-10s-12 4.5-12 10 5.4 10 12 10c1.5 0 2.9-.2 4.2-.6L40 43l-.9-3.3c3-1.8 4.9-4.5 4.9-7.7zm-16-2a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm8 0a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
   </svg>
 );
 
@@ -79,6 +104,8 @@ export const IMChannelsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState<string | null>(null);
   const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
+  const [qqDialogOpen, setQQDialogOpen] = useState(false);
+  const [wechatDialogOpen, setWeChatDialogOpen] = useState(false);
   const [agentDropdownId, setAgentDropdownId] = useState<string | null>(null);
 
   const feishuConnected = bridge.status === 'running' && bridge.feishuStatus === 'running';
@@ -268,10 +295,29 @@ export const IMChannelsView: React.FC = () => {
             {t('imChannels.subtitle', '管理消息通道配置，选择 AI 后端')}
           </p>
         </div>
-        <Button size="sm" onClick={() => setFeishuDialogOpen(true)}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          {t('imChannels.addChannel', '添加通道')}
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm">
+              <Plus className="mr-1.5 h-4 w-4" />
+              {t('imChannels.addChannel', '添加通道')}
+              <ChevronDown className="ml-1 h-3 w-3 opacity-70" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40">
+            <DropdownMenuItem onClick={() => setFeishuDialogOpen(true)}>
+              <FeishuIcon className="mr-2 h-4 w-4" />
+              {t('home.imChannel.feishu', '飞书')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setQQDialogOpen(true)}>
+              <QQIcon className="mr-2 h-4 w-4" />
+              QQ
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setWeChatDialogOpen(true)}>
+              <WeChatIcon className="mr-2 h-4 w-4" />
+              {t('home.imChannel.wechat', '微信')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Usage guide */}
@@ -280,10 +326,10 @@ export const IMChannelsView: React.FC = () => {
           {t('imChannels.guideTitle', '使用说明')}
         </p>
         <ul className="space-y-1 text-[11px] leading-relaxed text-blue-700/80 dark:text-blue-400/80">
-          <li>{t('imChannels.guide1', '1. 点击「添加通道」填写飞书机器人的 App ID 和 App Secret，支持添加多个飞书机器人')}</li>
+          <li>{t('imChannels.guide1', '1. 点击「添加通道」选择飞书或 QQ，填写机器人的 App ID 和 App Secret')}</li>
           <li>{t('imChannels.guide2', '2. 通过右侧下拉框为每个通道选择 AI 后端：Claude Code（使用官方 Claude Max 订阅）或 OpenClaw（通过 Frogclaw 服务器）')}</li>
           <li>{t('imChannels.guide3', '3. 每种后端同一时间只能绑定一个通道，切换时会自动解绑原通道')}</li>
-          <li>{t('imChannels.guide4', '4. 分配后端后飞书机器人将自动连接，在飞书中发送消息即可开始 AI 对话')}</li>
+          <li>{t('imChannels.guide4', '4. 分配后端后机器人将自动连接，在 IM 中发送消息即可开始 AI 对话')}</li>
         </ul>
       </div>
 
@@ -300,7 +346,7 @@ export const IMChannelsView: React.FC = () => {
             </div>
             <p className="text-sm font-medium">{t('imChannels.noChannels', '暂无通道配置')}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {t('imChannels.noChannelsHint', '点击"添加通道"配置飞书或其他 IM 通道')}
+              {t('imChannels.noChannelsHint', '点击"添加通道"配置飞书或 QQ 机器人')}
             </p>
           </div>
         ) : (
@@ -327,14 +373,24 @@ export const IMChannelsView: React.FC = () => {
                 >
                   {/* Icon */}
                   <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-white">
-                    <FeishuIcon className="h-5 w-5" />
+                    {ch.platform === 'qq' ? (
+                      <QQIcon className="h-5 w-5" />
+                    ) : ch.platform === 'wechat' ? (
+                      <WeChatIcon className="h-5 w-5" />
+                    ) : (
+                      <FeishuIcon className="h-5 w-5" />
+                    )}
                   </div>
 
                   {/* Info */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">
-                        {t('home.imChannel.feishu', '飞书')}
+                        {ch.platform === 'qq'
+                          ? 'QQ'
+                          : ch.platform === 'wechat'
+                            ? t('home.imChannel.wechat', '微信')
+                            : t('home.imChannel.feishu', '飞书')}
                       </span>
                       <span className={cn('h-2 w-2 rounded-full', statusColor)} />
                       {isAssigned && feishuConnected && (
@@ -411,6 +467,16 @@ export const IMChannelsView: React.FC = () => {
       <FeishuSetupDialog
         open={feishuDialogOpen}
         onOpenChange={setFeishuDialogOpen}
+        onConnected={handleDialogConnected}
+      />
+      <QQSetupDialog
+        open={qqDialogOpen}
+        onOpenChange={setQQDialogOpen}
+        onConnected={handleDialogConnected}
+      />
+      <WeChatSetupDialog
+        open={wechatDialogOpen}
+        onOpenChange={setWeChatDialogOpen}
         onConnected={handleDialogConnected}
       />
     </div>

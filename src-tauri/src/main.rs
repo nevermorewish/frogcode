@@ -26,6 +26,7 @@ use commands::platform_bridge::{
     platform_openclaw_restart, platform_openclaw_start, platform_openclaw_stop,
     platform_read_log, platform_reload_config, platform_save_agent_config, platform_save_config,
     platform_start, platform_status, platform_stop, platform_write_log,
+    platform_wechat_qr_cancel, platform_wechat_qr_start, platform_wechat_qr_wait,
     get_im_channels, save_im_channels,
     PlatformBridgeState,
 };
@@ -691,6 +692,9 @@ fn main() {
             platform_openclaw_restart,
             platform_list_openclaw_sessions,
             platform_get_openclaw_session,
+            platform_wechat_qr_start,
+            platform_wechat_qr_wait,
+            platform_wechat_qr_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -36,7 +36,7 @@ use commands::acemcp::{
 use commands::claude::{
     cancel_claude_execution, check_claude_version, clear_custom_claude_path, continue_claude_code,
     delete_project, delete_project_permanently, delete_session, delete_sessions_batch,
-    execute_claude_code, find_claude_md_files, get_available_tools, get_claude_execution_config,
+    ensure_onboarding_complete, execute_claude_code, find_claude_md_files, get_available_tools, get_claude_execution_config,
     get_claude_path, get_claude_permission_config, get_claude_session_output, get_claude_settings,
     get_codex_system_prompt, get_hooks_config, get_permission_presets, get_project_sessions,
     get_system_prompt, list_directory_contents, list_hidden_projects, list_projects,
@@ -215,6 +215,9 @@ fn main() {
             // Initialize shell environment for macOS GUI applications
             // This must be done early to ensure CLI tools (claude, codex, etc.) can be found
             init_shell_environment();
+
+            // Ensure Claude CLI onboarding is marked complete
+            ensure_onboarding_complete();
 
             if let Err(e) = install_default_skills(&app.handle()) {
                 log::warn!("Default skill install failed: {}", e);

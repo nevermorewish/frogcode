@@ -18,7 +18,8 @@ pub use self::cli_runner::{
     resume_claude_code_with_deps, ClaudeProcessState, ClaudeSpawnDeps,
 };
 pub use self::config::{
-    check_claude_version, clear_custom_claude_path, find_claude_md_files, get_available_tools,
+    check_claude_version, clear_custom_claude_path, ensure_onboarding_complete,
+    find_claude_md_files, get_available_tools,
     get_claude_execution_config, get_claude_path, get_claude_permission_config,
     get_claude_settings, get_codex_system_prompt, get_permission_presets, get_system_prompt,
     // Claude WSL mode configuration

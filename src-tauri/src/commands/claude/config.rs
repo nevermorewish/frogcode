@@ -315,6 +315,47 @@ pub async fn save_system_prompt(content: String) -> Result<String, String> {
     Ok("System prompt saved successfully".to_string())
 }
 
+/// Ensure ~/.claude.json has hasCompletedOnboarding: true so that
+/// Claude Code CLI skips the interactive onboarding wizard.
+/// Called at app startup and when saving settings.
+pub fn ensure_onboarding_complete() {
+    log::info!("ensure_onboarding_complete: checking ~/.claude.json");
+    if let Some(home_dir) = dirs::home_dir() {
+        let claude_json_path = home_dir.join(".claude.json");
+        let mut claude_json = if claude_json_path.exists() {
+            fs::read_to_string(&claude_json_path)
+                .ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                .unwrap_or(serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        if claude_json.get("hasCompletedOnboarding") != Some(&serde_json::json!(true)) {
+            if let Some(obj) = claude_json.as_object_mut() {
+                obj.insert(
+                    "hasCompletedOnboarding".to_string(),
+                    serde_json::json!(true),
+                );
+            }
+            if let Ok(json_str) = serde_json::to_string_pretty(&claude_json) {
+                match fs::write(&claude_json_path, &json_str) {
+                    Ok(_) => log::info!(
+                        "Ensured hasCompletedOnboarding=true in {:?}",
+                        claude_json_path
+                    ),
+                    Err(e) => log::warn!("Failed to write .claude.json: {}", e),
+                }
+            }
+        } else {
+            log::info!(
+                "hasCompletedOnboarding already true in {:?}",
+                claude_json_path
+            );
+        }
+    }
+}
+
 /// Saves the Claude settings file
 #[tauri::command]
 pub async fn save_claude_settings(settings: serde_json::Value) -> Result<String, String> {
@@ -384,38 +425,7 @@ pub async fn save_claude_settings(settings: serde_json::Value) -> Result<String,
 
     log::info!("Settings saved successfully to: {:?}", settings_path);
 
-    // Also ensure ~/.claude.json has hasCompletedOnboarding: true so that
-    // Claude Code CLI skips the interactive onboarding wizard. This is
-    // critical for headless/automated usage (e.g. IM channel sidecar).
-    if let Some(home_dir) = dirs::home_dir() {
-        let claude_json_path = home_dir.join(".claude.json");
-        let mut claude_json = if claude_json_path.exists() {
-            fs::read_to_string(&claude_json_path)
-                .ok()
-                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-                .unwrap_or(serde_json::json!({}))
-        } else {
-            serde_json::json!({})
-        };
-
-        if claude_json.get("hasCompletedOnboarding") != Some(&serde_json::json!(true)) {
-            if let Some(obj) = claude_json.as_object_mut() {
-                obj.insert(
-                    "hasCompletedOnboarding".to_string(),
-                    serde_json::json!(true),
-                );
-            }
-            if let Ok(json_str) = serde_json::to_string_pretty(&claude_json) {
-                match fs::write(&claude_json_path, &json_str) {
-                    Ok(_) => log::info!(
-                        "Ensured hasCompletedOnboarding=true in {:?}",
-                        claude_json_path
-                    ),
-                    Err(e) => log::warn!("Failed to write .claude.json: {}", e),
-                }
-            }
-        }
-    }
+    ensure_onboarding_complete();
 
     Ok("Settings saved successfully".to_string())
 }

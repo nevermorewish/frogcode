@@ -262,7 +262,7 @@ export const IMChannelsView: React.FC = () => {
       // Skip if already tracked OR user explicitly deleted it
       if (appId && !seen.has(appId) && !suppressed.includes(appId)) {
         list.push({
-          id: `${agentType}-${appId}`,
+          id: `feishu-${appId}`,
           platform: 'feishu',
           appId,
           appSecret: cfg.feishu.appSecret || '',

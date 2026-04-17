@@ -124,10 +124,17 @@ function killOldSidecars(): void {
     const { execSync } = require('child_process') as typeof import('child_process');
     if (process.platform === 'win32') {
       // Find node processes whose command line contains our sidecar script name
-      const out = execSync(
-        'wmic process where "name=\'node.exe\'" get ProcessId,CommandLine /format:csv',
-        { encoding: 'utf8', timeout: 5000, windowsHide: true },
-      );
+      // CRITICAL: capture stdout to prevent wmic errors from leaking to parent process
+      let out: string;
+      try {
+        out = execSync(
+          'wmic process where "name=\'node.exe\'" get ProcessId,CommandLine /format:csv 2>nul',
+          { encoding: 'utf8', timeout: 5000, windowsHide: true },
+        );
+      } catch (e: any) {
+        log('warn', 'wmic query failed:', e.message);
+        return;
+      }
       for (const line of out.split('\n')) {
         if (!line.includes('frogcode-platform-sidecar')) continue;
         const parts = line.trim().split(',');
@@ -135,13 +142,13 @@ function killOldSidecars(): void {
         if (!pid || pid === process.pid) continue;
         log('info', `killing old sidecar pid=${pid}`);
         try {
-          execSync(`taskkill /PID ${pid} /F /T`, { timeout: 3000, windowsHide: true });
+          execSync(`taskkill /PID ${pid} /F /T 2>nul`, { timeout: 3000, windowsHide: true });
         } catch {}
       }
     } else {
       // Unix: pkill by process title
       try {
-        execSync(`pkill -f "${SIDECAR_TITLE}" || true`, { timeout: 3000 });
+        execSync(`pkill -f "${SIDECAR_TITLE}" 2>/dev/null || true`, { timeout: 3000 });
       } catch {}
     }
   } catch (e: any) {

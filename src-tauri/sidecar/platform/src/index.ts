@@ -205,9 +205,17 @@ function loadChannelsFromDisk(): IMChannelConfig[] {
     'im-channels.json',
   );
   try {
-    if (!fs.existsSync(p)) return [];
+    if (!fs.existsSync(p)) {
+      log('warn', `im-channels.json not found at: ${p}`);
+      return [];
+    }
     const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return Array.isArray(data.channels) ? data.channels : [];
+    const channels = Array.isArray(data.channels) ? data.channels : [];
+    log('info', `Loaded ${channels.length} channels from ${p}`);
+    channels.forEach(ch => {
+      log('info', `  - ${ch.platform} ${ch.appId.slice(0, 12)} assignment=${ch.assignment}`);
+    });
+    return channels;
   } catch (e: any) {
     log('warn', 'Failed to load im-channels.json:', e.message);
     return [];
@@ -705,8 +713,10 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
   // Init agentManager if assigned
   let agentManager: AgentManager | null = null;
   if (assignment !== 'none') {
+    log('info', `[${appId.slice(0, 12)}] Creating agent: ${assignment}`);
     const agent = createAgent(assignment as AgentType);
     agentManager = new AgentManager(agent);
+    log('info', `[${appId.slice(0, 12)}] AgentManager created successfully`);
     // Wire agent events → this bot's card renderer
     agentManager.onEvent((_key, evt) => {
       // sessionKey format: "feishu:chatId:userId" (from makeSessionKey)
@@ -715,6 +725,8 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
         log('error', `[${appId.slice(0, 12)}] cardRenderer.processEvent:`, e.message),
       );
     });
+  } else {
+    log('warn', `[${appId.slice(0, 12)}] assignment is 'none', agentManager will be null`);
   }
 
   const bot: BotConnection = {
@@ -834,7 +846,9 @@ async function reconcileBots(): Promise<void> {
   }
 }
 async function _reconcileBotsInner(): Promise<void> {
+  log('info', '========== reconcileBots START ==========');
   const channels = loadChannelsFromDisk();
+  log('info', `Current bots: feishu=${bots.size} qq=${qqBots.size} wechat=${wechatBot ? 1 : 0}`);
   const desiredFeishuAppIds = new Set<string>();
   const desiredQQAppIds = new Set<string>();
   let desiredWeChatId: string | null = null;

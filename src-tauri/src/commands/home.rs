@@ -395,14 +395,14 @@ Write-Host 'Node.js installed successfully'",
     {
         match tool_id {
             "node" => {
-                // 优先使用 brew，如果没有则使用 sh 脚本下载官方安装包
+                // 优先使用 brew，如果没有则使用 n-install 安装到用户目录（无需 sudo）
                 if run_lookup("brew").is_some() {
                     Ok(("brew".to_string(), vec!["install".into(), "node".into()], false))
                 } else {
-                    // 使用 curl 下载并安装 Node.js LTS 官方 pkg
+                    // 使用 n-install 脚本安装 n 和 Node.js LTS 到 ~/n，无需 sudo
                     Ok(("sh".to_string(), vec![
                         "-c".into(),
-                        "curl -fsSL https://nodejs.org/dist/v20.11.1/node-v20.11.1.pkg -o /tmp/node.pkg && sudo installer -pkg /tmp/node.pkg -target / && rm /tmp/node.pkg".into()
+                        "curl -fsSL https://raw.githubusercontent.com/mklement0/n-install/stable/bin/n-install | bash -s -- -y lts && export N_PREFIX=\"$HOME/n\" && export PATH=\"$N_PREFIX/bin:$PATH\"".into()
                     ], false))
                 }
             },
@@ -500,7 +500,11 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
                 if !stderr.trim().is_empty() { write_log(&format!("STDERR:\n{}", stderr.trim())); }
 
                 let message = if success {
-                    format!("{} 安装成功", id)
+                    if id == "node" && cfg!(target_os = "macos") && run_lookup("brew").is_none() {
+                        format!("{} 安装成功。请重启应用以使 Node.js 生效", id)
+                    } else {
+                        format!("{} 安装成功", id)
+                    }
                 } else {
                     // Include stderr snippet in message for user visibility
                     let err_hint = stderr.lines().take(3).collect::<Vec<_>>().join(" | ");

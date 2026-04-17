@@ -1,7 +1,7 @@
 {
   "name": "frog-code",
   "private": true,
-  "version": "1.0.13",
+  "version": "1.0.14",
   "license": "AGPL-3.0",
   "type": "module",
   "scripts": {
@@ -15,7 +15,8 @@
     "tauri:dev": "tauri dev",
     "web:build": "npm run build && cd src-tauri && cargo build --release --bin frogcode-web",
     "web:build-fast": "npm run build && cd src-tauri && cargo build --profile dev-release --bin frogcode-web",
-    "web:run": "npm run build && cd src-tauri && cargo run --bin frogcode-web"
+    "web:run": "npm run build && cd src-tauri && cargo run --bin frogcode-web",
+    "cli:build-linux": "wsl -d Ubuntu -- bash -c \"cd \\\"$(wslpath \\\"$INIT_CWD\\\")\\\" && bash build-linux-cli.sh\""
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.30",

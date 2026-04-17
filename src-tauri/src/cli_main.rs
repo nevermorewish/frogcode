@@ -313,24 +313,19 @@ fn cmd_logout() -> anyhow::Result<()> {
 }
 
 fn cmd_whoami() -> anyhow::Result<()> {
-    match read_session()? {
-        None => {
-            println!("Not logged in. Run: frogcode-cli login");
-            std::process::exit(1);
-        }
-        Some(s) => {
-            println!("username     : {}", s.user.username);
-            println!("display_name : {}", s.user.display_name);
-            println!("id           : {}", s.user.id);
-            println!("group        : {}", s.user.group);
-            println!("tokens       : {}", s.tokens.len());
-            println!("saved_at     : {}", s.saved_at);
-            println!(
-                "credentials  : {}",
-                if s.credentials_b64.is_some() { "stored" } else { "not stored" }
-            );
-        }
-    }
+    let Some(s) = read_session()? else {
+        anyhow::bail!("not logged in — run `frogcode-cli login`");
+    };
+    println!("username     : {}", s.user.username);
+    println!("display_name : {}", s.user.display_name);
+    println!("id           : {}", s.user.id);
+    println!("group        : {}", s.user.group);
+    println!("tokens       : {}", s.tokens.len());
+    println!("saved_at     : {}", s.saved_at);
+    println!(
+        "credentials  : {}",
+        if s.credentials_b64.is_some() { "stored" } else { "not stored" }
+    );
     Ok(())
 }
 
@@ -488,7 +483,7 @@ fn truncate(s: &str, n: usize) -> String {
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
-async fn main() {
+async fn main() -> std::process::ExitCode {
     env_logger::init();
     let cli = Cli::parse();
 
@@ -507,8 +502,11 @@ async fn main() {
         },
     };
 
-    if let Err(e) = result {
-        eprintln!("error: {}", e);
-        std::process::exit(1);
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::ExitCode::FAILURE
+        }
     }
 }

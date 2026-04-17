@@ -446,6 +446,9 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
             let node_path = run_lookup("node");
             write_log(&format!("Node lookup result: {:?}", node_path));
             if node_path.is_none() {
+                #[cfg(target_os = "macos")]
+                let msg = "需要先安装 Node.js 才能安装此工具。如果您刚安装了 Node.js，请重启应用后再试".to_string();
+                #[cfg(not(target_os = "macos"))]
                 let msg = "需要先安装 Node.js 才能安装此工具".to_string();
                 write_log(&format!("FAILED: {}", msg));
                 return Ok(InstallResult {
@@ -500,8 +503,19 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
                 if !stderr.trim().is_empty() { write_log(&format!("STDERR:\n{}", stderr.trim())); }
 
                 let message = if success {
-                    if id == "node" && cfg!(target_os = "macos") && run_lookup("brew").is_none() {
-                        format!("{} 安装成功。请重启应用以使 Node.js 生效", id)
+                    if id == "node" {
+                        #[cfg(target_os = "macos")]
+                        {
+                            if run_lookup("brew").is_none() {
+                                format!("{} 安装成功。请重启应用以使 Node.js 生效", id)
+                            } else {
+                                format!("{} 安装成功", id)
+                            }
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            format!("{} 安装成功", id)
+                        }
                     } else {
                         format!("{} 安装成功", id)
                     }

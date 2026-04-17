@@ -274,31 +274,28 @@ export class OpenClawWsClient extends EventEmitter {
     const resolvedDeviceToken = explicitToken ? undefined : (storedToken ?? undefined);
     const authToken = explicitToken ?? resolvedDeviceToken;
 
-    // When we have an explicit gateway token, use token-only auth and skip
-    // device signature — the gateway validates the signature first and rejects
-    // the connection before it even looks at the token.
-    let deviceBlock: Record<string, unknown> | undefined;
-    if (!explicitToken) {
-      const payloadStr = buildDeviceAuthPayloadV3({
-        deviceId: this.deviceIdentity.deviceId,
-        clientId,
-        clientMode,
-        role,
-        scopes,
-        signedAtMs,
-        token: authToken ?? '',
-        nonce,
-        platform,
-      });
-      const signature = signDevicePayload(this.deviceIdentity.privateKeyPem, payloadStr);
-      deviceBlock = {
-        id: this.deviceIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(this.deviceIdentity.publicKeyPem),
-        signature,
-        signedAt: signedAtMs,
-        nonce,
-      };
-    }
+    // Always include device identity — newer openclaw versions call
+    // clearUnboundScopes() on connections without a device block, which
+    // strips all self-declared scopes and causes "missing scope" errors.
+    const payloadStr = buildDeviceAuthPayloadV3({
+      deviceId: this.deviceIdentity.deviceId,
+      clientId,
+      clientMode,
+      role,
+      scopes,
+      signedAtMs,
+      token: authToken ?? '',
+      nonce,
+      platform,
+    });
+    const signature = signDevicePayload(this.deviceIdentity.privateKeyPem, payloadStr);
+    const deviceBlock = {
+      id: this.deviceIdentity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(this.deviceIdentity.publicKeyPem),
+      signature,
+      signedAt: signedAtMs,
+      nonce,
+    };
 
     const frame: RequestFrame = {
       type: 'req',
@@ -308,7 +305,7 @@ export class OpenClawWsClient extends EventEmitter {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: { id: clientId, version: '1.0.0', platform, mode: clientMode },
-        ...(deviceBlock ? { device: deviceBlock } : {}),
+        device: deviceBlock,
         auth:
           authToken || resolvedDeviceToken
             ? { token: authToken, deviceToken: resolvedDeviceToken }

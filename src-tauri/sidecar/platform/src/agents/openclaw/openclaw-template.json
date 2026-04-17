@@ -78,8 +78,7 @@
   "gateway": {
     "auth": {
       "mode": "token",
-      "token": "b00ae3f77621f7fd62082b7ed4d3096b2f2381e1b12cdd33",
-      "scopes": ["operator.admin", "operator.read", "operator.write"]
+      "token": "b00ae3f77621f7fd62082b7ed4d3096b2f2381e1b12cdd33"
     },
     "bind": "lan",
     "controlUi": {

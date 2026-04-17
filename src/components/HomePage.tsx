@@ -180,10 +180,21 @@ const DevEnvironmentCard: React.FC<{
       onToast(`${t('home.installing', '安装中')} ${toolName}...`, 'info');
       try {
         const result = await api.installTool(toolId);
-        onToast(
-          result.message || (result.success ? `${toolName} 安装成功` : `${toolName} 安装失败`),
-          result.success ? 'success' : 'error'
-        );
+        const message = result.message || (result.success ? `${toolName} 安装成功` : `${toolName} 安装失败`);
+
+        // 如果失败，附加详细日志
+        let detailedMessage = message;
+        if (!result.success) {
+          const logs = [];
+          if (result.stdout?.trim()) logs.push(`输出: ${result.stdout.trim()}`);
+          if (result.stderr?.trim()) logs.push(`错误: ${result.stderr.trim()}`);
+          if (result.log_file) logs.push(`详细日志: ${result.log_file}`);
+          if (logs.length > 0) {
+            detailedMessage = `${message}\n\n${logs.join('\n')}`;
+          }
+        }
+
+        onToast(detailedMessage, result.success ? 'success' : 'error');
         await checkTools();
       } catch (e) {
         onToast(`${toolName} 安装失败: ${e}`, 'error');
@@ -207,10 +218,21 @@ const DevEnvironmentCard: React.FC<{
         onToast(`${t('home.installing', '安装中')} ${tool.name}...`, 'info');
         try {
           const result = await api.installTool(tool.id);
-          onToast(
-            result.message || (result.success ? `${tool.name} 安装成功` : `${tool.name} 安装失败`),
-            result.success ? 'success' : 'error'
-          );
+          const message = result.message || (result.success ? `${tool.name} 安装成功` : `${tool.name} 安装失败`);
+
+          // 如果失败，附加详细日志
+          let detailedMessage = message;
+          if (!result.success) {
+            const logs = [];
+            if (result.stdout?.trim()) logs.push(`输出: ${result.stdout.trim()}`);
+            if (result.stderr?.trim()) logs.push(`错误: ${result.stderr.trim()}`);
+            if (result.log_file) logs.push(`详细日志: ${result.log_file}`);
+            if (logs.length > 0) {
+              detailedMessage = `${message}\n\n${logs.join('\n')}`;
+            }
+          }
+
+          onToast(detailedMessage, result.success ? 'success' : 'error');
         } catch (e) {
           onToast(`${tool.name} 安装失败: ${e}`, 'error');
         }

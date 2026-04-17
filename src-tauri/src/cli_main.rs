@@ -73,6 +73,30 @@ enum Command {
         #[command(subcommand)]
         action: ImAction,
     },
+    /// Development environment: check & install tools (Node.js, Git, Claude Code, Codex, Gemini, OpenClaw)
+    Env {
+        #[command(subcommand)]
+        action: EnvAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum EnvAction {
+    /// Print a status table for all supported tools
+    Check {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install one tool by id, or all missing tools when no id is given.
+    /// Valid ids: node, git, claude, codex, gemini, openclaw
+    Install {
+        /// Optional tool id. Omit to install every missing tool in dependency order.
+        tool: Option<String>,
+        /// Reinstall even if the tool is already detected.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -479,6 +503,147 @@ fn truncate(s: &str, n: usize) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// env check / env install
+// ---------------------------------------------------------------------------
+
+const TOOL_ORDER: &[&str] = &["node", "git", "claude", "codex", "gemini", "openclaw"];
+
+async fn cmd_env_check(as_json: bool) -> anyhow::Result<()> {
+    let status = commands::home::check_tools_installed()
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&status.tools)?);
+        return Ok(());
+    }
+
+    println!("{:<10} {:<14} {:<10} {}", "ID", "NAME", "STATUS", "VERSION / PATH");
+    println!("{}", "-".repeat(80));
+    for t in &status.tools {
+        let status_text = if t.installed { "installed" } else { "missing" };
+        let detail = match (&t.version, &t.path) {
+            (Some(v), _) => v.clone(),
+            (None, Some(p)) => p.clone(),
+            _ => "-".to_string(),
+        };
+        println!(
+            "{:<10} {:<14} {:<10} {}",
+            t.id,
+            truncate(&t.name, 14),
+            status_text,
+            truncate(&detail, 50)
+        );
+    }
+    let missing: Vec<_> = status.tools.iter().filter(|t| !t.installed && t.installable).collect();
+    if missing.is_empty() {
+        println!("\nAll tools installed.");
+    } else {
+        let ids: Vec<_> = missing.iter().map(|t| t.id.as_str()).collect();
+        println!("\n{} missing: {}", missing.len(), ids.join(", "));
+        println!("Run: frogcode-cli env install   (installs everything missing)");
+    }
+    Ok(())
+}
+
+async fn install_one(id: &str) -> anyhow::Result<bool> {
+    println!("→ Installing {}...", id);
+    append_cli_log("env-install", &format!("开始安装 {}", id));
+    let res = commands::home::install_tool(id.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    if !res.stdout.trim().is_empty() {
+        println!("{}", res.stdout.trim_end());
+    }
+    if !res.stderr.trim().is_empty() {
+        eprintln!("{}", res.stderr.trim_end());
+    }
+
+    if res.success {
+        println!("✓ {} installed", id);
+        append_cli_log("env-install", &format!("{} 安装成功", id));
+        Ok(true)
+    } else {
+        println!("✗ {} failed: {}", id, res.message);
+        if let Some(log) = &res.log_file {
+            println!("  详细日志: {}", log);
+        }
+        append_cli_log("env-install", &format!("{} 安装失败: {}", id, res.message));
+        Ok(false)
+    }
+}
+
+async fn cmd_env_install(tool: Option<String>, force: bool) -> anyhow::Result<()> {
+    // Specific tool requested.
+    if let Some(id) = tool {
+        if !TOOL_ORDER.contains(&id.as_str()) {
+            anyhow::bail!(
+                "unknown tool '{}' — valid: {}",
+                id,
+                TOOL_ORDER.join(", ")
+            );
+        }
+        if !force {
+            let status = commands::home::check_tools_installed()
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            if status.tools.iter().any(|t| t.id == id && t.installed) {
+                println!(
+                    "{} already installed. Use --force to reinstall.",
+                    id
+                );
+                return Ok(());
+            }
+        }
+        let ok = install_one(&id).await?;
+        if !ok {
+            anyhow::bail!("installation of '{}' failed", id);
+        }
+        return Ok(());
+    }
+
+    // Install all missing tools in dependency order.
+    let status = commands::home::check_tools_installed()
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let installed_ids: std::collections::HashSet<String> = status
+        .tools
+        .iter()
+        .filter(|t| t.installed)
+        .map(|t| t.id.clone())
+        .collect();
+
+    let mut failed: Vec<String> = Vec::new();
+    let mut installed_any = false;
+    for id in TOOL_ORDER {
+        if installed_ids.contains(*id) && !force {
+            println!("· {} already installed, skipping", id);
+            continue;
+        }
+        let ok = install_one(id).await?;
+        if ok {
+            installed_any = true;
+        } else {
+            failed.push((*id).to_string());
+        }
+    }
+
+    println!();
+    if failed.is_empty() {
+        if installed_any {
+            println!("✓ All requested tools installed. Run `frogcode-cli env check` to verify.");
+        } else {
+            println!("Nothing to install. Everything already present.");
+        }
+    } else {
+        println!("✗ {} failed: {}", failed.len(), failed.join(", "));
+        anyhow::bail!("{} tool(s) failed to install", failed.len());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -499,6 +664,10 @@ async fn main() -> std::process::ExitCode {
             }
             ImAction::List { json } => cmd_im_list(json).await,
             ImAction::Remove { id } => cmd_im_remove(id).await,
+        },
+        Command::Env { action } => match action {
+            EnvAction::Check { json } => cmd_env_check(json).await,
+            EnvAction::Install { tool, force } => cmd_env_install(tool, force).await,
         },
     };
 

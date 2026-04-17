@@ -68,11 +68,13 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
 
     setIsDownloading(true);
     setError(null);
+    setIsInstalled(false);
     setDownloadProgress(0);
 
     try {
       let totalBytes = 0;
       let downloadedBytes = 0;
+      let finished = false;
 
       await updateHandle.downloadAndInstall((event) => {
         if (event.event === "Started") {
@@ -87,16 +89,35 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
           }
         } else if (event.event === "Finished") {
           setDownloadProgress(100);
-          setIsInstalled(true);
+          finished = true;
         }
       });
+
+      // 只有 downloadAndInstall 整个 Promise resolve 了才算真正安装完成。
+      // Finished 事件只表示字节下载完，后面还有签名校验 + 启动安装器两步。
+      if (finished) {
+        setIsInstalled(true);
+      }
     } catch (err) {
       console.error("下载安装失败:", err);
-      const message = err instanceof Error ? err.message : "下载安装失败，请尝试手动下载";
-      if (message.toLowerCase().includes("signature") || message.toLowerCase().includes("verify")) {
-        setError("更新包签名校验失败，无法自动更新；请前往下载页面手动更新。");
+      const raw = err instanceof Error ? err.message : String(err ?? "");
+      const lower = raw.toLowerCase();
+      const isSignatureError =
+        lower.includes("signature") ||
+        lower.includes("verify") ||
+        lower.includes("key id") ||
+        lower.includes("public key") ||
+        lower.includes("minisign") ||
+        lower.includes("签名");
+
+      if (isSignatureError) {
+        setError(
+          `更新包签名校验失败，无法自动更新；请前往下载页面手动更新。\n原始错误：${raw || "(空)"}`,
+        );
       } else {
-        setError(message);
+        setError(
+          `下载安装失败，请尝试手动下载。\n原始错误：${raw || "(空)"}`,
+        );
       }
     } finally {
       setIsDownloading(false);
@@ -181,7 +202,7 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
         {error && (
           <div className={cn("p-3 rounded-lg flex items-start gap-2", statusStyles.error)}>
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <p className="text-sm">{error}</p>
+            <p className="text-sm whitespace-pre-wrap break-words">{error}</p>
           </div>
         )}
 

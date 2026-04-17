@@ -134,6 +134,115 @@ Frog Code 是一个为 AI 驱动的代码开发工作流量身打造的专业桌
 
 ---
 
+## 命令行工具 (frogcode-cli)
+
+无头环境（Linux 服务器、CI/CD、远程 SSH）下可以用独立的 CLI 登录 Frogclaw 并管理 IM 通道，不需要启动 GUI。与桌面版共享 `~/.frogcode/` 下的配置文件，GUI 和 CLI 完全互操作。
+
+### 获取二进制
+
+```bash
+# Linux 从源码编译（在 WSL 或原生 Linux）
+bash build-linux-cli.sh
+# 产物：dist-linux/frogcode-cli（约 6.3 MB，ELF x86_64，glibc 动态链接）
+
+# Windows（开发本地使用）
+cd src-tauri
+cargo build --release --bin frogcode-cli
+# 产物：src-tauri/target/release/frogcode-cli.exe
+```
+
+首次在 Linux 编译前需装系统依赖（见 `build-linux-cli.sh` 头部注释）。
+
+### 子命令总览
+
+```
+frogcode-cli login [--username U] [--password P] [--save-creds]
+frogcode-cli logout
+frogcode-cli whoami
+frogcode-cli im add --platform <feishu|qq|wechat> --app-id X --app-secret Y \
+                    [--label L] [--assign <claudecode|openclaw|none>] [--sandbox]
+frogcode-cli im list [--json]
+frogcode-cli im remove <id>
+```
+
+### 登录
+
+```bash
+# 交互式（TTY 会提示密码，不回显）
+frogcode-cli login --username alice
+Password: ********
+
+# 一行式（适合脚本，注意密码会进 shell 历史）
+frogcode-cli login --username alice --password "$FROGCLAW_PASS"
+
+# 记住凭据，下次直接 login 无参数即可自动登录
+frogcode-cli login --username alice --password "$FROGCLAW_PASS" --save-creds
+```
+
+登录成功后：
+- 会话缓存到 `~/.frogcode/cli-session.json`（Unix 下权限 `0600`）
+- 若服务端有 OpenClaw provider，自动写入 `~/.frogcode/openclaw/config/openclaw.json`
+- 一行审计记录追加到 `~/.frogcode/platform-sidecar.log`
+
+### 查看当前会话
+
+```bash
+$ frogcode-cli whoami
+username     : alice
+display_name : Alice
+id           : 12345
+group        : default
+tokens       : 3
+saved_at     : 2026-04-17T10:00:00+08:00
+credentials  : stored
+```
+
+未登录时退出码为 `1`。
+
+### IM 通道管理
+
+```bash
+# 添加飞书通道并分配给 Claude Code
+frogcode-cli im add \
+  --platform feishu \
+  --app-id cli_abc123 \
+  --app-secret xyz789 \
+  --label "生产飞书机器人" \
+  --assign claudecode
+
+# 列表（默认表格；--json 输出含 appSecret 的完整 JSON）
+frogcode-cli im list
+frogcode-cli im list --json | jq .
+
+# 删除（id 就是 list 里第一列，格式 `{platform}-{appId}`）
+frogcode-cli im remove feishu-cli_abc123
+```
+
+通道 ID 规则与 GUI 完全一致（`feishu-*` / `qq-*` / `wechat-*`），CLI 改动后打开 GUI 即可看到新通道；GUI 删除后 CLI 也同步消失。
+
+### 登出
+
+```bash
+frogcode-cli logout    # 删除 ~/.frogcode/cli-session.json
+```
+
+### 配置文件位置
+
+| 文件 | 作用 |
+|------|------|
+| `~/.frogcode/cli-session.json` | CLI 会话缓存（user、tokens、可选 base64 凭据） |
+| `~/.frogcode/im-channels.json` | IM 通道列表，GUI/CLI 共用 |
+| `~/.frogcode/agents/{type}.json` | 每个 agent 的 Feishu 凭据 |
+| `~/.frogcode/platform-sidecar.log` | 含 CLI 操作审计行 `[cli login]` / `[cli im-add]` 等 |
+
+### 已知限制
+
+- 暂不支持测试发送消息（飞书/QQ/微信的发送逻辑在 Node sidecar 中）
+- 暂不支持设备码 / OAuth 登录流程（仅用户名密码）
+- CLI 不会启动 platform sidecar；桌面 GUI 或 `frogcode-web` 仍需单独运行来处理实际的 IM 消息
+
+---
+
 ## 核心特性
 
 ### 会话管理

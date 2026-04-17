@@ -47,6 +47,7 @@ hidden_projects.json
 # Build artifacts
 src-tauri/target/
 src-tauri/Cargo.lock
+dist-linux/
 
 # Temporary files
 nul

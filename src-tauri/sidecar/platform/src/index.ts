@@ -17,6 +17,21 @@
  */
 
 // ============================================================================
+// CRITICAL: Intercept ALL stdout writes BEFORE any import to prevent pollution
+// ============================================================================
+const _originalStdoutWrite = process.stdout.write.bind(process.stdout);
+let _stdoutReady = false;
+
+// Redirect all stdout to stderr until we're ready to emit READY signal
+process.stdout.write = function(chunk: any, ...args: any[]): boolean {
+  if (_stdoutReady) {
+    return _originalStdoutWrite(chunk, ...args);
+  }
+  // Before READY, redirect to stderr to prevent pollution
+  return process.stderr.write(chunk, ...args);
+} as any;
+
+// ============================================================================
 // CRITICAL: redirect console.{log,info,warn,debug} to stderr BEFORE any import.
 // ============================================================================
 import * as path from 'node:path';
@@ -1699,6 +1714,7 @@ if (!platformConfig) {
 server.listen(args.port, '127.0.0.1', () => {
   const addr = server.address();
   const actualPort = typeof addr === 'object' && addr ? addr.port : args.port;
+  _stdoutReady = true; // Enable stdout for READY signal
   process.stdout.write(`FROGCODE_PLATFORM_READY port=${actualPort}\n`);
   log('info', `listening on 127.0.0.1:${actualPort}`);
 });

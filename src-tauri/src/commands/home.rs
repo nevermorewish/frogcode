@@ -394,7 +394,18 @@ Write-Host 'Node.js installed successfully'",
     #[cfg(target_os = "macos")]
     {
         match tool_id {
-            "node" => Ok(("brew".to_string(), vec!["install".into(), "node".into()], false)),
+            "node" => {
+                // 优先使用 brew，如果没有则使用 sh 脚本下载官方安装包
+                if run_lookup("brew").is_some() {
+                    Ok(("brew".to_string(), vec!["install".into(), "node".into()], false))
+                } else {
+                    // 使用 curl 下载并安装 Node.js LTS 官方 pkg
+                    Ok(("sh".to_string(), vec![
+                        "-c".into(),
+                        "curl -fsSL https://nodejs.org/dist/v20.11.1/node-v20.11.1.pkg -o /tmp/node.pkg && sudo installer -pkg /tmp/node.pkg -target / && rm /tmp/node.pkg".into()
+                    ], false))
+                }
+            },
             "git" => Ok(("brew".to_string(), vec!["install".into(), "git".into()], false)),
             "claude" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
             "codex" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@openai/codex".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),

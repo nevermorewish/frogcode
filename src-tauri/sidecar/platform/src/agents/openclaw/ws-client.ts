@@ -355,7 +355,10 @@ export class OpenClawWsClient extends EventEmitter {
         this.lastTick = Date.now();
         this.startTickWatch();
 
-        log('info', 'connected and authenticated');
+        const grantedScopes = Array.isArray(authInfo?.scopes) ? authInfo.scopes : '(not returned)';
+        const grantedRole = typeof authInfo?.role === 'string' ? authInfo.role : '(not returned)';
+        log('info', `connected and authenticated role=${grantedRole} scopes=${JSON.stringify(grantedScopes)}`);
+        log('info', `connect response: ${JSON.stringify(helloOk)?.slice(0, 500)}`);
         this.emit('connected');
       },
       reject: (err) => {

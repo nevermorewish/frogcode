@@ -665,12 +665,25 @@ export class OpenClawAgent implements Agent {
           config = this.bootstrapConfig();
         }
       }
-      // Force port + bind to our authoritative values. The writer's content
-      // dedup will skip the write if everything matches.
+      // Force port + auth scopes to our authoritative values. The writer's
+      // content dedup will skip the write if everything matches.
       config.gateway = config.gateway || {};
       if (config.gateway.port !== port) {
         log('info', `rewriting gateway.port ${config.gateway.port} → ${port}`);
         config.gateway.port = port;
+      }
+      // Ensure auth.scopes includes operator.write — newer openclaw versions
+      // require explicit scope grants instead of treating operator.admin as
+      // a superscope.
+      const requiredScopes = ['operator.admin', 'operator.read', 'operator.write'];
+      config.gateway.auth = config.gateway.auth || {};
+      const currentScopes: string[] = Array.isArray(config.gateway.auth.scopes)
+        ? config.gateway.auth.scopes
+        : [];
+      const missingScopes = requiredScopes.filter(s => !currentScopes.includes(s));
+      if (missingScopes.length > 0) {
+        config.gateway.auth.scopes = [...new Set([...currentScopes, ...requiredScopes])];
+        log('info', `rewriting gateway.auth.scopes → ${JSON.stringify(config.gateway.auth.scopes)}`);
       }
       this.configWriter.write(config);
     } catch (err: any) {

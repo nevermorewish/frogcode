@@ -257,7 +257,7 @@ export class OpenClawWsClient extends EventEmitter {
     const id = randomUUID();
     const signedAtMs = Date.now();
     const role = 'operator';
-    const scopes = ['operator.admin'];
+    const scopes = ['operator.admin', 'operator.read', 'operator.write'];
     // The gateway validates client.id against a whitelist of known clients:
     // webchat-ui, openclaw-control-ui, webchat, cli, gateway-client,
     // openclaw-macos, openclaw-ios, openclaw-android, node-host, test, etc.

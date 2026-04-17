@@ -451,7 +451,13 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
         let prog_path = run_lookup(&program);
         write_log(&format!("{} lookup result: {:?}", program, prog_path));
         if prog_path.is_none() {
-            let msg = format!("未找到安装程序 \"{}\"，请先手动安装", program);
+            let msg = if program == "brew" {
+                format!(
+                    "未找到 Homebrew 包管理器。请先安装 Homebrew:\n\n/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\n\n或访问 https://brew.sh 查看安装说明"
+                )
+            } else {
+                format!("未找到安装程序 \"{}\"，请先手动安装", program)
+            };
             write_log(&format!("FAILED: {}", msg));
             return Ok(InstallResult {
                 success: false,

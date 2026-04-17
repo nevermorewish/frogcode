@@ -18,13 +18,13 @@
               "input": 0,
               "output": 0
             },
-            "id": "claude-opus-4-6",
+            "id": "claude-opus-4-7",
             "input": [
               "text",
               "image"
             ],
             "maxTokens": 8192,
-            "name": "claude-opus-4-6",
+            "name": "claude-opus-4-7",
             "reasoning": false
           }
         ]
@@ -38,7 +38,7 @@
       },
       "maxConcurrent": 4,
       "model": {
-        "primary": "anthropic/claude-opus-4-6"
+        "primary": "anthropic/claude-opus-4-7"
       },
       "subagents": {
         "maxConcurrent": 8

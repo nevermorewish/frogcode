@@ -95,6 +95,8 @@ export class OpenClawWsClient extends EventEmitter {
   private tickIntervalMs = 30_000;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When device auth is rejected (NOT_PAIRED etc), fall back to token-only. */
+  private skipDeviceAuth = false;
 
   private readonly url: string;
   private readonly token: string;
@@ -258,9 +260,6 @@ export class OpenClawWsClient extends EventEmitter {
     const signedAtMs = Date.now();
     const role = 'operator';
     const scopes = ['operator.admin', 'operator.read', 'operator.write'];
-    // The gateway validates client.id against a whitelist of known clients:
-    // webchat-ui, openclaw-control-ui, webchat, cli, gateway-client,
-    // openclaw-macos, openclaw-ios, openclaw-android, node-host, test, etc.
     const clientId = 'gateway-client';
     const clientMode = 'backend';
     const platform = process.platform;
@@ -274,28 +273,36 @@ export class OpenClawWsClient extends EventEmitter {
     const resolvedDeviceToken = explicitToken ? undefined : (storedToken ?? undefined);
     const authToken = explicitToken ?? resolvedDeviceToken;
 
-    // Always include device identity — newer openclaw versions call
-    // clearUnboundScopes() on connections without a device block, which
-    // strips all self-declared scopes and causes "missing scope" errors.
-    const payloadStr = buildDeviceAuthPayloadV3({
-      deviceId: this.deviceIdentity.deviceId,
-      clientId,
-      clientMode,
-      role,
-      scopes,
-      signedAtMs,
-      token: authToken ?? '',
-      nonce,
-      platform,
-    });
-    const signature = signDevicePayload(this.deviceIdentity.privateKeyPem, payloadStr);
-    const deviceBlock = {
-      id: this.deviceIdentity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(this.deviceIdentity.publicKeyPem),
-      signature,
-      signedAt: signedAtMs,
-      nonce,
-    };
+    // Build device block unless a previous attempt was rejected (NOT_PAIRED
+    // etc on older gateways). Newer openclaw versions require device identity
+    // to preserve scopes (clearUnboundScopes strips them otherwise); local
+    // connections get auto-paired. If device auth fails, we set skipDeviceAuth
+    // and reconnect with token-only as a fallback for old versions.
+    const includeDevice = !this.skipDeviceAuth;
+    let deviceBlock: Record<string, unknown> | undefined;
+    if (includeDevice) {
+      const payloadStr = buildDeviceAuthPayloadV3({
+        deviceId: this.deviceIdentity.deviceId,
+        clientId,
+        clientMode,
+        role,
+        scopes,
+        signedAtMs,
+        token: authToken ?? '',
+        nonce,
+        platform,
+      });
+      const signature = signDevicePayload(this.deviceIdentity.privateKeyPem, payloadStr);
+      deviceBlock = {
+        id: this.deviceIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(this.deviceIdentity.publicKeyPem),
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+    }
+
+    log('info', `connect attempt: device=${includeDevice} token=${!!authToken} deviceToken=${!!resolvedDeviceToken}`);
 
     const frame: RequestFrame = {
       type: 'req',
@@ -305,7 +312,7 @@ export class OpenClawWsClient extends EventEmitter {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: { id: clientId, version: '1.0.0', platform, mode: clientMode },
-        device: deviceBlock,
+        ...(deviceBlock ? { device: deviceBlock } : {}),
         auth:
           authToken || resolvedDeviceToken
             ? { token: authToken, deviceToken: resolvedDeviceToken }
@@ -352,13 +359,31 @@ export class OpenClawWsClient extends EventEmitter {
         this.lastTick = Date.now();
         this.startTickWatch();
 
-        const grantedScopes = Array.isArray(authInfo?.scopes) ? authInfo.scopes : '(not returned)';
+        const grantedScopes = Array.isArray(authInfo?.scopes) ? authInfo.scopes : [];
         const grantedRole = typeof authInfo?.role === 'string' ? authInfo.role : '(not returned)';
-        log('info', `connected and authenticated role=${grantedRole} scopes=${JSON.stringify(grantedScopes)}`);
-        log('info', `connect response: ${JSON.stringify(helloOk)?.slice(0, 500)}`);
+        log('info', `connected role=${grantedRole} scopes=${JSON.stringify(grantedScopes)} device=${includeDevice}`);
+
+        if (Array.isArray(grantedScopes) && grantedScopes.length === 0 && !includeDevice) {
+          log('warn', 'scopes are empty (token-only fallback) — chat.send may fail on newer openclaw versions');
+        }
+
         this.emit('connected');
       },
       reject: (err) => {
+        const msg = err.message?.toLowerCase() ?? '';
+        const isDeviceError =
+          msg.includes('not_paired') ||
+          msg.includes('not paired') ||
+          msg.includes('device') ||
+          msg.includes('pairing');
+
+        if (includeDevice && isDeviceError) {
+          log('warn', `device auth rejected (${err.message}), falling back to token-only`);
+          this.skipDeviceAuth = true;
+          this.ws?.close(4009, 'device auth fallback');
+          return;
+        }
+
         log('error', 'connect failed:', err.message);
         this.ws?.close(4008, 'connect failed');
       },

@@ -4223,7 +4223,7 @@ export const api = {
   /**
    * Silently install a tool by id (e.g. "node", "git", "claude", "codex", "gemini", "openclaw").
    */
-  async installTool(toolId: string): Promise<{ success: boolean; stdout: string; stderr: string; message: string }> {
+  async installTool(toolId: string): Promise<{ success: boolean; stdout: string; stderr: string; message: string; log_file?: string }> {
     return await invoke("install_tool", { toolId });
   },
 

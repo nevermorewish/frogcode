@@ -26,6 +26,13 @@ export const CLAUDE_PRICING = {
     cache_write: 18.75,
     cache_read: 1.50,
   },
+  // Claude Opus 4.7 (locked-version option exposed in UI)
+  'claude-opus-4-7': {
+    input: 15.0,
+    output: 75.0,
+    cache_write: 18.75,
+    cache_read: 1.50,
+  },
   'claude-sonnet-4-6': {
     input: 3.0,
     output: 15.0,
@@ -102,6 +109,7 @@ export const CLAUDE_CONTEXT_WINDOWS = {
   // Claude 4.6 Series
   'claude-opus-4-6': 200000,
   'claude-opus-4-6[1m]': 1000000,
+  'claude-opus-4-7': 200000,
   'claude-sonnet-4-6': 200000,
   'claude-sonnet-4-6[1m]': 1000000,
   // Claude 4.5 Series
@@ -279,6 +287,9 @@ export function getContextWindowSize(model?: string, engine?: string): number {
 export const MODEL_ALIASES = {
   'opus': 'claude-opus-4-6', // 默认最新版本
   'opus1m': 'claude-opus-4-6[1m]',
+  'opus47': 'claude-opus-4-7',
+  'opus4.7': 'claude-opus-4-7',
+  'opus-4.7': 'claude-opus-4-7',
   'opus4.6': 'claude-opus-4-6',
   'opus-4.6': 'claude-opus-4-6',
   'opus4.5': 'claude-opus-4-5',

@@ -51,6 +51,12 @@ export function getModels(): ModelConfig[] {
       name: opus1mName,
       description: "Opus with 1 million token context",
       icon: <Crown className="h-4 w-4" />
+    },
+    {
+      id: "opus47",
+      name: "Claude Opus 4.7",
+      description: "Locked to Claude Opus 4.7 (claude-opus-4-7)",
+      icon: <Sparkles className="h-4 w-4" />
     }
   ];
 }

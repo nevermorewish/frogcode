@@ -128,8 +128,136 @@ fn ensure_windows_path() {
     }
 }
 
+/// Extend PATH on Unix so GUI-launched processes can find node/npm/git
+/// installed under nvm, n, fnm, conda, Homebrew, /usr/local, etc. Desktop
+/// launchers and AppImages usually don't source the user's shell rc files.
+#[cfg(not(target_os = "windows"))]
+fn ensure_unix_path() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let has = |p: &str| current.split(':').any(|s| s == p);
+
+    let mut extra: Vec<String> = Vec::new();
+    let mut push = |p: String| {
+        if !p.is_empty() && std::path::Path::new(&p).is_dir() && !extra.contains(&p) {
+            extra.push(p);
+        }
+    };
+
+    // System / Homebrew / core locations first — stable absolute paths.
+    for p in &[
+        "/usr/local/bin",
+        "/opt/homebrew/bin",      // macOS apple-silicon brew
+        "/home/linuxbrew/.linuxbrew/bin",
+        "/usr/bin",
+        "/bin",
+        "/snap/bin",
+        "/opt/conda/bin",
+    ] {
+        if !has(p) { push((*p).to_string()); }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        // nvm: ~/.nvm/versions/node/*/bin — pick every installed version's bin
+        let nvm_versions = std::path::PathBuf::from(&home).join(".nvm/versions/node");
+        if let Ok(rd) = std::fs::read_dir(&nvm_versions) {
+            for entry in rd.flatten() {
+                let bin = entry.path().join("bin");
+                if bin.is_dir() {
+                    push(bin.to_string_lossy().to_string());
+                }
+            }
+        }
+        // n (mklement0/n-install) puts things under ~/n
+        push(format!("{}/n/bin", home));
+        // fnm multishell directory
+        if let Ok(fnm_ms) = std::env::var("FNM_MULTISHELL_PATH") {
+            push(format!("{}/bin", fnm_ms));
+        }
+        // conda in user home
+        push(format!("{}/miniconda3/bin", home));
+        push(format!("{}/anaconda3/bin", home));
+        // npm global prefix (user installs)
+        push(format!("{}/.npm-global/bin", home));
+        push(format!("{}/.local/bin", home));
+    }
+
+    // npm prefix -g (authoritative for user-configured npm global)
+    if let Some(np) = unix_npm_global_prefix() {
+        let bin = format!("{}/bin", np.trim_end_matches('/'));
+        push(bin);
+    }
+
+    if !extra.is_empty() {
+        let new_path = if current.is_empty() {
+            extra.join(":")
+        } else {
+            format!("{}:{}", extra.join(":"), current)
+        };
+        std::env::set_var("PATH", &new_path);
+        write_log(&format!("PATH extended with: {}", extra.join(":")));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unix_npm_global_prefix() -> Option<String> {
+    // Try each existing node binary we can find — npm may live next to it.
+    for candidate in ["npm", "/usr/local/bin/npm", "/usr/bin/npm"] {
+        let out = Command::new(candidate).arg("prefix").arg("-g").output().ok();
+        if let Some(o) = out {
+            if o.status.success() {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !s.is_empty() { return Some(s); }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn is_reparse_point(p: &std::path::Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    std::fs::symlink_metadata(p)
+        .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        .unwrap_or(false)
+}
+
+/// Walk PATH + PATHEXT manually. Orders of magnitude faster than `where.exe`
+/// on systems with large PATH, and avoids picking up App Execution Aliases
+/// (zero-byte reparse points in WindowsApps) that hang when executed.
+#[cfg(target_os = "windows")]
+fn lookup_in_path_windows(cmd: &str) -> Option<String> {
+    if cmd.contains('\\') || cmd.contains('/') {
+        let p = std::path::Path::new(cmd);
+        if p.is_file() && !is_reparse_point(p) {
+            return Some(p.to_string_lossy().to_string());
+        }
+        return None;
+    }
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let exts: Vec<&str> = pathext.split(';').filter(|s| !s.is_empty()).collect();
+
+    for dir in path_var.split(';').filter(|s| !s.is_empty()) {
+        let bare = std::path::Path::new(dir).join(cmd);
+        if bare.is_file() && !is_reparse_point(&bare) {
+            return Some(bare.to_string_lossy().to_string());
+        }
+        for ext in &exts {
+            let candidate = std::path::Path::new(dir).join(format!("{}{}", cmd, ext));
+            if candidate.is_file() && !is_reparse_point(&candidate) {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "windows")]
 fn npm_global_prefix() -> Option<String> {
+    // Skip the cmd subprocess entirely when npm isn't resolvable — on systems
+    // without node/npm, `cmd /C npm prefix -g` can hang ~30s before failing.
+    lookup_in_path_windows("npm")?;
     use std::os::windows::process::CommandExt;
     let mut c = Command::new("cmd");
     c.args(&["/C", "npm", "prefix", "-g"]);
@@ -153,64 +281,105 @@ fn lookup_in_npm_prefix(cmd: &str) -> Option<String> {
     None
 }
 
-fn run_lookup(cmd: &str) -> Option<String> {
-    let lookup = if cfg!(target_os = "windows") { "where" } else { "which" };
-    let mut c = Command::new(lookup);
-    c.arg(cmd);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(CREATE_NO_WINDOW);
-    }
-    let found = c.output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        })
-        .filter(|s| !s.is_empty());
-
-    #[cfg(target_os = "windows")]
-    {
-        if found.is_some() {
-            return found;
+#[cfg(not(target_os = "windows"))]
+fn lookup_in_path(cmd: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    // If cmd is already an absolute / relative path, check it directly.
+    if cmd.contains('/') {
+        let p = std::path::Path::new(cmd);
+        if p.is_file() {
+            return Some(p.to_string_lossy().to_string());
         }
-        // Fallback: check npm global prefix directly (for npm-installed CLIs)
+        return None;
+    }
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in path_var.split(':').filter(|s| !s.is_empty()) {
+        let candidate = std::path::Path::new(dir).join(cmd);
+        if let Ok(meta) = std::fs::metadata(&candidate) {
+            if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    // Last-resort: well-known locations for core shell utilities that
+    // may exist even when PATH is stripped (e.g. some GUI-launched processes).
+    for p in &["/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin"] {
+        let candidate = std::path::Path::new(p).join(cmd);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+fn run_lookup(cmd: &str) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Manual PATH walk first — fast, no subprocess, skips App Execution
+        // Aliases. We deliberately avoid `where.exe`: on systems with large
+        // PATH it can take 5-7s per call, and matches in WindowsApps cause
+        // the subsequent `--version` to launch the Microsoft Store.
+        if let Some(p) = lookup_in_path_windows(cmd) {
+            return Some(p);
+        }
         return lookup_in_npm_prefix(cmd);
     }
     #[cfg(not(target_os = "windows"))]
     {
-        found
+        // Same approach on Unix: manual walk first (handles minimal images
+        // that ship without `which`), then fall back to `which` for any
+        // exotic resolution it might still cover.
+        if let Some(p) = lookup_in_path(cmd) {
+            return Some(p);
+        }
+        let mut c = Command::new("which");
+        c.arg(cmd);
+        c.output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty())
     }
 }
 
 fn run_version(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut c = Command::new(cmd);
-    for a in args {
-        c.arg(a);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(CREATE_NO_WINDOW);
-    }
-    c.output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if out.is_empty() {
-                String::from_utf8_lossy(&o.stderr).trim().to_string()
-            } else {
-                out
-            }
-        })
-        .filter(|s| !s.is_empty())
+    // Run with a hard timeout so a misbehaving binary (e.g. one that prompts
+    // on first launch) can't stall detection indefinitely.
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let cmd = cmd.to_string();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut c = Command::new(&cmd);
+        for a in &args { c.arg(a); }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(CREATE_NO_WINDOW);
+        }
+        let result = c.output().ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if out.is_empty() {
+                    String::from_utf8_lossy(&o.stderr).trim().to_string()
+                } else {
+                    out
+                }
+            })
+            .filter(|s| !s.is_empty());
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
 }
 
 fn check_tool(id: &str, name: &str, cmd: &str, args: &[&str], installable: bool) -> ToolStatus {
@@ -237,30 +406,42 @@ fn check_tool(id: &str, name: &str, cmd: &str, args: &[&str], installable: bool)
 
 #[tauri::command]
 pub async fn check_tools_installed() -> Result<HomeToolsStatus, String> {
-    let tools = tokio::task::spawn_blocking(|| {
+    // PATH setup must complete before any parallel lookups see it.
+    tokio::task::spawn_blocking(|| {
         ensure_windows_path();
+        #[cfg(not(target_os = "windows"))]
+        ensure_unix_path();
         write_log("========== check_tools_installed ==========");
         write_log(&format!("PATH: {}", std::env::var("PATH").unwrap_or_default()));
-        #[cfg(target_os = "windows")]
-        {
-            let prefix = npm_global_prefix();
-            write_log(&format!("npm prefix -g: {:?}", prefix));
-            for cmd in &["claude", "codex", "gemini"] {
-                let via_where = run_lookup(cmd);
-                write_log(&format!("lookup({}): {:?}", cmd, via_where));
-            }
-        }
-        vec![
-            check_tool("node", "Node.js", "node", &["--version"], true),
-            check_tool("git", "Git", "git", &["--version"], true),
-            check_tool("claude", "Claude Code", "claude", &["--version"], true),
-            check_tool("codex", "Codex", "codex", &["--version"], true),
-            check_tool("gemini", "Gemini CLI", "gemini", &["--version"], true),
-            check_tool("openclaw", "OpenClaw", "openclaw", &["--version"], true),
-        ]
     })
     .await
-    .map_err(|e| format!("Failed to check tools: {}", e))?;
+    .map_err(|e| format!("Failed to prepare env: {}", e))?;
+
+    // Check all tools concurrently — each check spawns subprocesses that can
+    // block for seconds on Windows, so serial runs easily exceed 30s.
+    let specs: &[(&str, &str, &str)] = &[
+        ("node", "Node.js", "node"),
+        ("git", "Git", "git"),
+        ("claude", "Claude Code", "claude"),
+        ("codex", "Codex", "codex"),
+        ("gemini", "Gemini CLI", "gemini"),
+        ("openclaw", "OpenClaw", "openclaw"),
+    ];
+
+    let mut handles = Vec::with_capacity(specs.len());
+    for (id, name, cmd) in specs {
+        let id = id.to_string();
+        let name = name.to_string();
+        let cmd = cmd.to_string();
+        handles.push(tokio::task::spawn_blocking(move || {
+            check_tool(&id, &name, &cmd, &["--version"], true)
+        }));
+    }
+
+    let mut tools = Vec::with_capacity(handles.len());
+    for h in handles {
+        tools.push(h.await.map_err(|e| format!("Failed to check tool: {}", e))?);
+    }
 
     Ok(HomeToolsStatus { tools })
 }
@@ -433,6 +614,8 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
     let id = tool_id.clone();
     tokio::task::spawn_blocking(move || {
         ensure_windows_path();
+        #[cfg(not(target_os = "windows"))]
+        ensure_unix_path();
 
         let log_file = get_log_path().map(|p| p.to_string_lossy().to_string());
         write_log(&format!("========== Installing tool: {} ==========", id));

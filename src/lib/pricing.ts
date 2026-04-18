@@ -31,6 +31,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWrite: 6.25,
     cacheRead: 0.50
   },
+  'claude-opus-4.7': {
+    input: 5.0,
+    output: 25.0,
+    cacheWrite: 6.25,
+    cacheRead: 0.50
+  },
   'claude-opus-4.6-1m': {
     input: 5.0,
     output: 25.0,
@@ -390,6 +396,11 @@ export function getPricingForModel(model?: string, engine?: string): ModelPricin
   // ============================================================================
   // Claude Models (Anthropic)
   // ============================================================================
+
+  // Claude Opus 4.7 (locked version)
+  if (normalized.includes('opus') && (normalized.includes('4.7') || normalized.includes('4-7'))) {
+    return MODEL_PRICING['claude-opus-4.7'];
+  }
 
   // Claude 4.6 Series (Latest)
   if (normalized.includes('opus') && (normalized.includes('4.6') || normalized.includes('4-6'))) {

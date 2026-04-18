@@ -129,6 +129,8 @@ pub(super) fn map_model_to_claude_alias(model: &str) -> String {
         "opus1m" => "opus[1m]".to_string(),
         // Use 'opus' alias which automatically resolves to latest Opus (Claude 4.6)
         "opus" => "opus".to_string(),
+        // Locked to Claude Opus 4.7 (not an alias — full model id, version frozen)
+        "opus47" => "claude-opus-4-7".to_string(),
         // Pass through any other model names unchanged (for future compatibility)
         _ => model.to_string(),
     }

@@ -391,18 +391,43 @@ export function killProcessOnPort(
         }
       }
     } else {
-      // lsof -ti :port returns one PID per line
-      const out = execSync(`lsof -ti :${port}`, {
-        encoding: 'utf8',
-        timeout: 5000,
-      });
-      for (const line of out.split('\n')) {
-        const pid = parseInt(line.trim(), 10);
-        if (pid > 0 && !pids.includes(pid)) pids.push(pid);
+      // Unix: try lsof → ss → fuser in order. `lsof` is absent on minimal
+      // Linux containers (we saw this bite us on gpufree) so we must have
+      // fallbacks. Any tool that returns one or more PIDs short-circuits.
+      const tryCollect = (cmd: string, parse: (stdout: string) => number[]): boolean => {
+        try {
+          const out = execSync(cmd, { encoding: 'utf8', timeout: 5000 });
+          for (const pid of parse(out)) {
+            if (pid > 0 && !pids.includes(pid)) pids.push(pid);
+          }
+          return pids.length > 0;
+        } catch {
+          return false; // command missing OR no match — try next
+        }
+      };
+
+      const parseOnePerLine = (s: string): number[] =>
+        s.split('\n').map((l) => parseInt(l.trim(), 10)).filter((n) => n > 0);
+
+      const parseSs = (s: string): number[] => {
+        // ss -lntpH output (one listener per line):
+        //   LISTEN 0 511 0.0.0.0:18789 0.0.0.0:* users:(("openclaw-gatewa",pid=124285,fd=21))
+        const out: number[] = [];
+        for (const line of s.split('\n')) {
+          const m = line.match(/pid=(\d+)/);
+          if (m) out.push(parseInt(m[1], 10));
+        }
+        return out;
+      };
+
+      if (!tryCollect(`lsof -ti :${port} 2>/dev/null`, parseOnePerLine)) {
+        if (!tryCollect(`ss -lntpH 'sport = :${port}' 2>/dev/null`, parseSs)) {
+          tryCollect(`fuser -n tcp ${port} 2>/dev/null`, parseOnePerLine);
+        }
       }
     }
   } catch {
-    // Command failed — port may not be in use or command not available
+    // Nothing worked — fall through; caller decides what to do
     return false;
   }
 
@@ -418,7 +443,17 @@ export function killProcessOnPort(
           windowsHide: true,
         });
       } else {
-        process.kill(pid, 'SIGKILL');
+        // Enumerate direct children (pgrep exits 1 when none → swallow)
+        let childPids: number[] = [];
+        try {
+          const out = execSync(`pgrep -P ${pid}`, { encoding: 'utf8', timeout: 3000 });
+          childPids = out.split(/\s+/).map((s) => parseInt(s, 10)).filter((n) => n > 0);
+        } catch { /* no children */ }
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* group gone */ }
+        for (const cpid of childPids) {
+          try { process.kill(cpid, 'SIGKILL'); } catch { /* gone */ }
+        }
+        try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
       }
     } catch (e: any) {
       logFn(`failed to kill pid=${pid}: ${e.message}`);
@@ -465,17 +500,39 @@ function reapOrphanFromPidFile(stateDir: string, logFn: (msg: string) => void): 
     return;
   }
 
-  // Alive — kill it
+  // Alive — kill it.
+  // On Linux, `openclaw` is a CLI wrapper that spawns the actual
+  // `openclaw-gateway` binary in a separate process group. SIGKILL'ing just
+  // the wrapper leaves the gateway child reparented to init, still bound to
+  // port 18789 — exactly the "port in use" zombie we keep seeing. Kill the
+  // whole process group (`kill(-pid)`) plus any direct children via pgrep,
+  // so no descendant survives.
   logFn(`reaping orphan openclaw pid=${pid} from previous run`);
   try {
     if (process.platform === 'win32') {
-      // Windows: use taskkill /f /t to kill the whole tree
+      // Windows: taskkill /f /t walks the whole tree
       require('node:child_process').execSync(`taskkill /f /t /pid ${pid}`, {
         stdio: 'ignore',
         windowsHide: true,
       });
     } else {
-      process.kill(pid, 'SIGKILL');
+      const { execSync } = require('node:child_process') as typeof import('node:child_process');
+      // First enumerate descendants via pgrep -P (direct children); openclaw
+      // only nests one level deep, so this is sufficient.
+      let childPids: number[] = [];
+      try {
+        const out = execSync(`pgrep -P ${pid}`, { encoding: 'utf8', timeout: 3000 });
+        childPids = out.split(/\s+/).map((s) => parseInt(s, 10)).filter((n) => n > 0);
+      } catch { /* pgrep exits 1 when no children — fine */ }
+
+      // Kill the whole process group (covers children that joined the group)
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* group may not exist */ }
+      // Then SIGKILL each enumerated child directly, in case they escaped the group
+      for (const cpid of childPids) {
+        try { process.kill(cpid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+      // Finally, the tracked pid itself
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
     }
   } catch (e: any) {
     logFn(`failed to kill orphan: ${e.message}`);

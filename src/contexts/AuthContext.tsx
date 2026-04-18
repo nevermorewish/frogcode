@@ -300,13 +300,11 @@ async function syncFeishuToImChannels(appId: string, appSecret: string) {
   // 2. Check if this appId already exists
   const existing = channels.find((ch) => ch.appId === appId);
   if (existing) {
-    // Already present — ensure it's assigned to openclaw and secret is up to date
-    if (existing.assignment !== 'openclaw' || existing.appSecret !== appSecret) {
-      // Unassign any other channel from openclaw first
-      for (const ch of channels) {
-        if (ch.assignment === 'openclaw' && ch !== existing) ch.assignment = 'none';
-      }
-      existing.assignment = 'openclaw';
+    // Already present — only refresh the secret if the server rotated it.
+    // DO NOT touch `assignment`: the user may have deliberately set this
+    // channel to 'none' or 'claudecode', and re-clobbering it on every
+    // login/refresh would make that choice impossible to persist.
+    if (existing.appSecret !== appSecret) {
       existing.appSecret = appSecret;
       await api.saveImChannels({ channels, suppressedAppIds });
     }

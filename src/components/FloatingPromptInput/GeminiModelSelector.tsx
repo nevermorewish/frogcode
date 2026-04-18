@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronUp, Check, Star, Sparkles, Brain, FlaskConical, Gauge } from "lucide-react";
+import { ChevronUp, Check, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -31,88 +31,19 @@ const DEFAULT_GEMINI_MODELS: GeminiModelConfig[] = [
     name: 'Gemini 3.1 Pro (Preview)',
     description: '最新旗舰模型，2M 上下文（2026年2月）',
     icon: <Star className="h-4 w-4 text-amber-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gemini-3-flash',
-    name: 'Gemini 3 Flash',
-    description: '最快模型，适合日常编码',
-    icon: <Gauge className="h-4 w-4 text-yellow-500" />,
     isDefault: true,
-  },
-  {
-    id: 'gemini-3-pro',
-    name: 'Gemini 3 Pro',
-    description: '强推理和编码能力',
-    icon: <Sparkles className="h-4 w-4 text-blue-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gemini-3-pro-preview',
-    name: 'Gemini 3 Pro (Preview)',
-    description: 'Experimental preview version',
-    icon: <FlaskConical className="h-4 w-4 text-purple-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gemini-3-flash-thinking',
-    name: 'Gemini 3 Flash Thinking',
-    description: 'Fast model with chain-of-thought',
-    icon: <Brain className="h-4 w-4 text-green-500" />,
-    isDefault: false,
   },
 ];
 
 /**
- * Icon assignment for dynamically discovered Gemini models.
- * Falls back to a generic icon if no pattern matches.
- */
-function getGeminiModelIcon(modelId: string): React.ReactNode {
-  const lower = modelId.toLowerCase();
-  if (lower.includes('thinking')) {
-    return <Brain className="h-4 w-4 text-green-500" />;
-  }
-  if (lower.includes('preview') || lower.includes('exp')) {
-    return <FlaskConical className="h-4 w-4 text-purple-500" />;
-  }
-  if (lower.includes('flash')) {
-    return <Gauge className="h-4 w-4 text-yellow-500" />;
-  }
-  if (lower.includes('pro') || lower.includes('ultra')) {
-    return <Sparkles className="h-4 w-4 text-blue-500" />;
-  }
-  return <Sparkles className="h-4 w-4 text-blue-400" />;
-}
-
-/**
- * Build the Gemini model list by merging defaults with cached model names.
- * Cached entries update display names of known models and can add new ones.
+ * Build the Gemini model list by applying cached display names to defaults.
  */
 export function getGeminiModels(): GeminiModelConfig[] {
   const cached = getCachedGeminiModelNames();
-  const cachedIds = new Set(Object.keys(cached));
 
-  // Start from defaults, updating display names from cache
-  const models: GeminiModelConfig[] = DEFAULT_GEMINI_MODELS.map((model) => {
-    if (cached[model.id]) {
-      cachedIds.delete(model.id);
-      return { ...model, name: cached[model.id] };
-    }
-    return model;
-  });
-
-  // Add any new models discovered from the stream that are not in defaults
-  for (const modelId of cachedIds) {
-    models.push({
-      id: modelId,
-      name: cached[modelId],
-      description: 'Discovered from stream',
-      icon: getGeminiModelIcon(modelId),
-      isDefault: false,
-    });
-  }
-
-  return models;
+  return DEFAULT_GEMINI_MODELS.map((model) =>
+    cached[model.id] ? { ...model, name: cached[model.id] } : model
+  );
 }
 
 /**

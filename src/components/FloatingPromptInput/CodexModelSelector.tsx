@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronUp, Check, Star, Brain, Cpu, Rocket, Zap } from "lucide-react";
+import { ChevronUp, Check, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -33,110 +33,17 @@ const DEFAULT_CODEX_MODELS: CodexModelConfig[] = [
     icon: <Star className="h-4 w-4 text-purple-500" />,
     isDefault: true,
   },
-  {
-    id: 'gpt-5.3-codex',
-    name: 'GPT-5.3 Codex',
-    description: '专用代码模型，比 5.2 快 25%（2026年2月）',
-    icon: <Rocket className="h-4 w-4 text-emerald-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gpt-5.3-codex-spark',
-    name: 'GPT-5.3 Codex Spark',
-    description: '轻量快速版，Cerebras WSE-3 芯片加速',
-    icon: <Zap className="h-4 w-4 text-amber-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gpt-5.2-codex',
-    name: 'GPT-5.2 Codex',
-    description: '上一代代码模型（2025年12月）',
-    icon: <Star className="h-4 w-4 text-yellow-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gpt-5.2',
-    name: 'GPT 5.2',
-    description: '上一代旗舰模型',
-    icon: <Star className="h-4 w-4 text-yellow-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gpt-5.1-codex-max',
-    name: 'GPT 5.1 Codex Max',
-    description: 'Balanced speed and quality for code',
-    icon: <Rocket className="h-4 w-4 text-green-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gpt-5.1-codex',
-    name: 'GPT 5.1 Codex',
-    description: 'Code generation baseline',
-    icon: <Cpu className="h-4 w-4 text-blue-500" />,
-    isDefault: false,
-  },
-  {
-    id: 'gpt-5.1',
-    name: 'GPT 5.1',
-    description: 'General-purpose LLM',
-    icon: <Brain className="h-4 w-4 text-orange-500" />,
-    isDefault: false,
-  },
 ];
 
 /**
- * Icon assignment for dynamically discovered Codex models.
- * Falls back to a generic icon if no pattern matches.
- */
-function getCodexModelIcon(modelId: string): React.ReactNode {
-  const lower = modelId.toLowerCase();
-  if (lower.includes('5.4-pro')) {
-    return <Star className="h-4 w-4 text-red-500" />;
-  }
-  if (lower.includes('5.4')) {
-    return <Star className="h-4 w-4 text-purple-500" />;
-  }
-  if (lower.includes('codex') && lower.includes('max')) {
-    return <Rocket className="h-4 w-4 text-green-500" />;
-  }
-  if (lower.includes('codex')) {
-    return <Rocket className="h-4 w-4 text-emerald-500" />;
-  }
-  if (lower.includes('o3') || lower.includes('o4')) {
-    return <Brain className="h-4 w-4 text-purple-500" />;
-  }
-  return <Cpu className="h-4 w-4 text-blue-500" />;
-}
-
-/**
- * Build the Codex model list by merging defaults with cached model names.
- * Cached entries update display names of known models and can add new ones.
+ * Build the Codex model list by applying cached display names to defaults.
  */
 export function getCodexModels(): CodexModelConfig[] {
   const cached = getCachedCodexModelNames();
-  const cachedIds = new Set(Object.keys(cached));
 
-  // Start from defaults, updating display names from cache
-  const models: CodexModelConfig[] = DEFAULT_CODEX_MODELS.map((model) => {
-    if (cached[model.id]) {
-      cachedIds.delete(model.id);
-      return { ...model, name: cached[model.id] };
-    }
-    return model;
-  });
-
-  // Add any new models discovered from the stream that are not in defaults
-  for (const modelId of cachedIds) {
-    models.push({
-      id: modelId,
-      name: cached[modelId],
-      description: 'Discovered from stream',
-      icon: getCodexModelIcon(modelId),
-      isDefault: false,
-    });
-  }
-
-  return models;
+  return DEFAULT_CODEX_MODELS.map((model) =>
+    cached[model.id] ? { ...model, name: cached[model.id] } : model
+  );
 }
 
 /**

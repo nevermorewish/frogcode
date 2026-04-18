@@ -539,28 +539,65 @@ fn get_install_command(tool_id: &str) -> Result<(String, Vec<String>, bool), Str
                 false,
             )),
             "node" => {
-                // Fallback: download Node.js LTS MSI from nodejs.org and install silently with msiexec.
+                // Try MSI first (to C:\Program Files\nodejs, needs admin). If msiexec fails
+                // (e.g. 1603 without elevation), fall back to user-scoped ZIP extraction to
+                // %LOCALAPPDATA%\Programs\nodejs — no admin, no UAC.
                 let arch = if cfg!(target_arch = "x86_64") { "x64" } else { "x86" };
                 let ps_script = format!(
                     "$ErrorActionPreference='Stop'; \
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
 $nodeVersion='25.9.0'; \
 $arch='{}'; \
-$url=\"https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-$arch.msi\"; \
+$msiInstalled=$false; \
 $msi=Join-Path $env:TEMP \"node-v$nodeVersion-$arch.msi\"; \
-Write-Host \"Downloading Node.js v$nodeVersion ($arch) from $url\"; \
-Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing; \
-$size=(Get-Item $msi).Length; \
-Write-Host \"Downloaded $size bytes\"; \
-Write-Host 'Installing Node.js via msiexec /qn ...'; \
-$logFile=Join-Path $env:TEMP 'node-msi-install.log'; \
-$p=Start-Process msiexec -ArgumentList '/i',\"`\"$msi`\"\",'/qn','/norestart','/L*v',\"`\"$logFile`\"\" -Wait -PassThru -NoNewWindow; \
-if ($p.ExitCode -ne 0) {{ \
-  $tail=if (Test-Path $logFile) {{ (Get-Content $logFile -Tail 30) -join \"`n\" }} else {{ '(no log)' }}; \
-  throw \"msiexec exited with $($p.ExitCode). Log tail:`n$tail\" \
+try {{ \
+  $url=\"https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-$arch.msi\"; \
+  Write-Host \"Downloading Node.js MSI v$nodeVersion ($arch) from $url\"; \
+  Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing; \
+  Write-Host \"Downloaded $((Get-Item $msi).Length) bytes\"; \
+  Write-Host 'Installing Node.js via msiexec /qn ...'; \
+  $logFile=Join-Path $env:TEMP 'node-msi-install.log'; \
+  $p=Start-Process msiexec -ArgumentList '/i',\"`\"$msi`\"\",'/qn','/norestart','/L*v',\"`\"$logFile`\"\" -Wait -PassThru -NoNewWindow; \
+  if ($p.ExitCode -eq 0) {{ $msiInstalled=$true; Write-Host 'MSI install succeeded' }} \
+  else {{ Write-Host \"msiexec exited with $($p.ExitCode), falling back to ZIP\" }} \
+}} catch {{ Write-Host \"MSI path failed: $($_.Exception.Message), falling back to ZIP\" }} \
+finally {{ if (Test-Path $msi) {{ Remove-Item $msi -Force -ErrorAction SilentlyContinue }} }}; \
+if (-not $msiInstalled) {{ \
+  $winArch=if ($arch -eq 'x64') {{ 'win-x64' }} else {{ 'win-x86' }}; \
+  $zipUrls=@( \
+    \"https://registry.npmmirror.com/-/binary/node/v$nodeVersion/node-v$nodeVersion-$winArch.zip\", \
+    \"https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/v$nodeVersion/node-v$nodeVersion-$winArch.zip\", \
+    \"https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-$winArch.zip\" \
+  ); \
+  $zip=Join-Path $env:TEMP \"node-v$nodeVersion-$winArch.zip\"; \
+  $ok=$false; $lastErr=''; \
+  foreach ($u in $zipUrls) {{ \
+    try {{ \
+      Write-Host \"Trying $u\"; \
+      Invoke-WebRequest -Uri $u -OutFile $zip -UseBasicParsing -TimeoutSec 120; \
+      if ((Get-Item $zip).Length -gt 10000000) {{ $ok=$true; Write-Host \"Downloaded from $u\"; break }} \
+    }} catch {{ $lastErr=$_.Exception.Message; Write-Host \"Failed: $lastErr\" }} \
+  }}; \
+  if (-not $ok) {{ throw \"All ZIP mirrors failed. Last error: $lastErr\" }}; \
+  $targetRoot=Join-Path $env:LOCALAPPDATA 'Programs\\nodejs'; \
+  $extractDir=Join-Path $env:TEMP 'node-zip-extract'; \
+  if (Test-Path $extractDir) {{ Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue }}; \
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null; \
+  Write-Host \"Extracting to $extractDir\"; \
+  Expand-Archive -Path $zip -DestinationPath $extractDir -Force; \
+  $inner=Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1; \
+  if (-not $inner) {{ throw 'ZIP extraction produced no directory' }}; \
+  if (Test-Path $targetRoot) {{ Remove-Item $targetRoot -Recurse -Force -ErrorAction SilentlyContinue }}; \
+  $parent=Split-Path $targetRoot -Parent; \
+  if (-not (Test-Path $parent)) {{ New-Item -ItemType Directory -Path $parent -Force | Out-Null }}; \
+  Move-Item -Path $inner.FullName -Destination $targetRoot -Force; \
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue; \
+  Remove-Item $zip -Force -ErrorAction SilentlyContinue; \
+  $nodeDir=$targetRoot; \
+  Write-Host \"ZIP extracted to $nodeDir\" \
+}} else {{ \
+  $nodeDir='C:\\Program Files\\nodejs' \
 }}; \
-Remove-Item $msi -Force -ErrorAction SilentlyContinue; \
-$nodeDir='C:\\Program Files\\nodejs'; \
 if (Test-Path $nodeDir) {{ \
   Write-Host \"Adding $nodeDir to user PATH\"; \
   $userPath=[Environment]::GetEnvironmentVariable('Path','User'); \
@@ -568,7 +605,7 @@ if (Test-Path $nodeDir) {{ \
     [Environment]::SetEnvironmentVariable('Path',\"$userPath;$nodeDir\",'User') \
   }}; \
   $env:Path=\"$env:Path;$nodeDir\" \
-}}; \
+}} else {{ throw \"Node.js directory not found: $nodeDir\" }}; \
 Write-Host 'Node.js installed successfully'",
                     arch
                 );

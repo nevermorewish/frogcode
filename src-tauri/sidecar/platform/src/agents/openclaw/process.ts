@@ -474,6 +474,57 @@ export function killProcessOnPort(
 }
 
 /**
+ * Kill every openclaw / openclaw-gateway process on the machine by image name.
+ *
+ * Motivation: the official openclaw CLI, when the user runs it manually, has
+ * its own "port in use → kill holder" preflight. If we start our gateway first
+ * and the user then types `openclaw gateway run` in a terminal (or has it
+ * auto-started), the CLI turns around and SIGTERMs ours. Our WS client then
+ * tries to reconnect, the CLI's new gateway hands out a fresh token, ours is
+ * stale, and we spin forever in `1008 unauthorized: gateway token mismatch`.
+ *
+ * This runs BEFORE we spawn our own gateway — no PID exclusion needed.
+ * Best-effort, errors swallowed.
+ */
+export function killAllOpenclawProcesses(logFn: (msg: string) => void): void {
+  const { execSync } = require('node:child_process') as typeof import('node:child_process');
+
+  if (process.platform === 'win32') {
+    for (const image of ['openclaw.exe', 'openclaw-gateway.exe']) {
+      try {
+        execSync(`taskkill /f /t /im ${image}`, {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+        });
+        logFn(`killed stray ${image} processes`);
+      } catch {
+        // taskkill returns non-zero when no match — silent is fine
+      }
+    }
+    return;
+  }
+
+  for (const name of ['openclaw', 'openclaw-gateway']) {
+    let pids: number[] = [];
+    try {
+      const out = execSync(`pgrep -x ${name}`, { encoding: 'utf8', timeout: 3000 });
+      pids = out
+        .split(/\s+/)
+        .map((s) => parseInt(s, 10))
+        .filter((n) => n > 0 && n !== process.pid);
+    } catch {
+      continue; // pgrep exit 1 = no match
+    }
+    for (const pid of pids) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* group gone */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+      logFn(`killed stray ${name} pid=${pid}`);
+    }
+  }
+}
+
+/**
  * Read the PID file from a previous run. If that PID is still alive, kill it.
  * This handles the Windows case where child processes outlive their parent.
  */

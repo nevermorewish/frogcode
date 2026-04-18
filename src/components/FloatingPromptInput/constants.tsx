@@ -1,57 +1,11 @@
-import { Zap, Brain, Sparkles, Crown } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { ModelConfig, ThinkingModeConfig } from "./types";
-import { getCachedModelNames } from "@/lib/modelNameParser";
-
-/**
- * Default model display names (used when no cache is available).
- * Intentionally version-less so they never go stale.
- */
-const DEFAULT_MODEL_NAMES: Record<string, string> = {
-  sonnet: "Claude Sonnet 4.6",
-  opus: "Claude Opus 4.6",
-};
 
 /**
  * Get available models with dynamically updated display names.
- * Reads cached model names from localStorage (populated by stream init messages).
- * Falls back to version-less defaults if no cache exists yet.
  */
 export function getModels(): ModelConfig[] {
-  const cached = getCachedModelNames();
-  const sonnetName = cached["sonnet"] || DEFAULT_MODEL_NAMES.sonnet;
-  const opusName = cached["opus"] || DEFAULT_MODEL_NAMES.opus;
-  const sonnet1mName = cached["sonnet"]
-    ? `${cached["sonnet"]} 1M`
-    : `${DEFAULT_MODEL_NAMES.sonnet} 1M`;
-  const opus1mName = cached["opus"]
-    ? `${cached["opus"]} 1M`
-    : `${DEFAULT_MODEL_NAMES.opus} 1M`;
-
   return [
-    {
-      id: "sonnet",
-      name: sonnetName,
-      description: "Fast and efficient for most coding tasks",
-      icon: <Zap className="h-4 w-4" />
-    },
-    {
-      id: "sonnet1m",
-      name: sonnet1mName,
-      description: "Sonnet with 1 million token context",
-      icon: <Brain className="h-4 w-4" />
-    },
-    {
-      id: "opus",
-      name: opusName,
-      description: "Most capable model with advanced reasoning & coding",
-      icon: <Sparkles className="h-4 w-4" />
-    },
-    {
-      id: "opus1m",
-      name: opus1mName,
-      description: "Opus with 1 million token context",
-      icon: <Crown className="h-4 w-4" />
-    },
     {
       id: "opus47",
       name: "Claude Opus 4.7",

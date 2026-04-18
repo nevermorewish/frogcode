@@ -34,7 +34,12 @@ import type {
   SessionKey,
   StartSessionOpts,
 } from '../types.js';
-import { OpenClawProcessManager, type ProcessConfig, killProcessOnPort } from './process.js';
+import {
+  OpenClawProcessManager,
+  type ProcessConfig,
+  killProcessOnPort,
+  killAllOpenclawProcesses,
+} from './process.js';
 import { OpenClawWsClient, type WsClientConfig } from './ws-client.js';
 import { OpenClawConfigWriter } from './config-writer.js';
 import { initialConfig } from './migrate.js';
@@ -683,6 +688,12 @@ export class OpenClawAgent implements Agent {
     log('info', `configPath=${configPath}`);
     log('info', `extensionsDir=${extensionsDir}`);
     log('info', `tmpDir=${tmpDir}`);
+
+    // Preempt any stray official openclaw / openclaw-gateway the user may have
+    // started manually — otherwise its own port-preflight will SIGTERM our
+    // gateway a few seconds after we spawn, leaving the WS client stuck in a
+    // token-mismatch reconnect loop.
+    killAllOpenclawProcesses((msg) => log('info', msg));
 
     // Port preflight — if in use, actively kill the holder so we can bind.
     if (await isPortInUse(port)) {

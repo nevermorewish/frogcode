@@ -665,7 +665,13 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
             });
         }
 
-        let mut c = Command::new(&program);
+        // Use the absolute path we resolved via run_lookup so the OS doesn't
+        // need to do its own PATH search. Avoids ENAMETOOLONG (os error 36)
+        // on Linux when PATH/env vars in conda+cuda environments push glibc's
+        // execvp past PATH_MAX while expanding entries.
+        let spawn_target = prog_path.as_deref().unwrap_or(program.as_str());
+        write_log(&format!("Spawning: {}", spawn_target));
+        let mut c = Command::new(spawn_target);
         for a in &args {
             c.arg(a);
         }

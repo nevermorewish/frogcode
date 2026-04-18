@@ -37,6 +37,7 @@ interface ToolStatus {
   version: string | null;
   path: string | null;
   installable: boolean;
+  needs_upgrade: boolean;
 }
 
 // =====================================================================
@@ -247,7 +248,9 @@ const DevEnvironmentCard: React.FC<{
   const installedCount = tools.filter((tool) => tool.installed).length;
   const totalCount = tools.length;
   const missingCount = tools.filter((t) => !t.installed && t.installable).length;
-  const allReady = installedCount === totalCount && totalCount > 0;
+  const needsUpgradeCount = tools.filter((t) => t.installed && t.needs_upgrade).length;
+  const allReady =
+    installedCount === totalCount && totalCount > 0 && needsUpgradeCount === 0;
 
   return (
     <FeatureCard
@@ -309,6 +312,17 @@ const DevEnvironmentCard: React.FC<{
         </div>
       )}
 
+      {missingCount === 0 && needsUpgradeCount > 0 && !loading && (
+        <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <span className="text-xs text-amber-700 dark:text-amber-400">
+            {t(
+              'home.devEnv.upgradeHint',
+              'Node.js 版本过低，OpenClaw 需要 v22.14+，请点击右侧“重装”升级'
+            )}
+          </span>
+        </div>
+      )}
+
       {loading && tools.length === 0 ? (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {[...Array(6)].map((_, i) => (
@@ -326,20 +340,25 @@ const DevEnvironmentCard: React.FC<{
           {tools.map((tool) => {
             const isInstalling = installingId === tool.id;
             const isOpenClaw = tool.id === 'openclaw';
+            const needsUpgrade = tool.installed && tool.needs_upgrade;
             return (
               <div
                 key={tool.id}
                 className={cn(
                   'flex items-center gap-2 rounded-lg border p-2.5 transition-colors',
-                  tool.installed
-                    ? 'border-green-500/20 bg-green-500/5'
-                    : 'border-red-500/20 bg-red-500/5'
+                  !tool.installed
+                    ? 'border-red-500/20 bg-red-500/5'
+                    : needsUpgrade
+                      ? 'border-amber-500/30 bg-amber-500/5'
+                      : 'border-green-500/20 bg-green-500/5'
                 )}
               >
-                {tool.installed ? (
-                  <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-500" />
-                ) : (
+                {!tool.installed ? (
                   <XCircle className="h-4 w-4 flex-shrink-0 text-red-500" />
+                ) : needsUpgrade ? (
+                  <XCircle className="h-4 w-4 flex-shrink-0 text-amber-500" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-500" />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-medium">{tool.name}</div>
@@ -353,6 +372,15 @@ const DevEnvironmentCard: React.FC<{
                       ) : (
                         t('home.installed', '已安装')
                       )}
+                    </div>
+                  ) : needsUpgrade ? (
+                    <div
+                      className="truncate text-[10px] text-amber-600 dark:text-amber-400"
+                      title={tool.version || ''}
+                    >
+                      {t('home.devEnv.nodeTooOld', '{{ver}} 过低，OpenClaw 需要 v22.14+', {
+                        ver: (tool.version || '').split('\n')[0] || '?',
+                      })}
                     </div>
                   ) : tool.version ? (
                     <div className="truncate text-[10px] text-muted-foreground" title={tool.version}>
@@ -379,6 +407,25 @@ const DevEnvironmentCard: React.FC<{
                       <>
                         <Play className="mr-0.5 h-3 w-3" />
                         {t('home.start', '启动')}
+                      </>
+                    )}
+                  </Button>
+                )}
+                {needsUpgrade && tool.installable && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => installOne(tool.id, tool.name)}
+                    disabled={installingAll || installingId !== null}
+                    className="h-6 flex-shrink-0 border-amber-500/40 px-2 text-[10px] text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+                    title={t('home.devEnv.reinstallHint', '重新安装以升级到受支持的版本')}
+                  >
+                    {isInstalling ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <>
+                        <RefreshCw className="mr-0.5 h-3 w-3" />
+                        {t('home.reinstall', '重装')}
                       </>
                     )}
                   </Button>

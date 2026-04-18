@@ -155,7 +155,7 @@ pub fn init_shell_environment() {
     if let Ok(home) = get_home_dir() {
         let nvm_paths = get_nvm_paths(&home);
         for p in nvm_paths {
-            if seen.insert(p.clone()) {
+            if is_sane_path_entry(&p) && seen.insert(p.clone()) {
                 final_paths.push(p);
             }
         }
@@ -170,7 +170,7 @@ pub fn init_shell_environment() {
     // 2. Shell PATH (from interactive shell to read .zshrc)
     if let Some(shell_path) = get_shell_path() {
         for p in shell_path.split(':') {
-            if !p.is_empty() && seen.insert(p.to_string()) {
+            if is_sane_path_entry(p) && seen.insert(p.to_string()) {
                 final_paths.push(p.to_string());
             }
         }
@@ -180,7 +180,7 @@ pub fn init_shell_environment() {
     if let Ok(home) = get_home_dir() {
         let fallback_paths = get_fallback_paths(&home);
         for p in fallback_paths {
-            if seen.insert(p.clone()) {
+            if is_sane_path_entry(&p) && seen.insert(p.clone()) {
                 final_paths.push(p);
             }
         }
@@ -188,7 +188,7 @@ pub fn init_shell_environment() {
 
     // 4. Original system PATH
     for p in current_path.split(':') {
-        if !p.is_empty() && seen.insert(p.to_string()) {
+        if is_sane_path_entry(p) && seen.insert(p.to_string()) {
             final_paths.push(p.to_string());
         }
     }
@@ -210,6 +210,24 @@ pub fn init_shell_environment() {
 #[cfg(not(unix))]
 pub fn init_shell_environment() {
     debug!("Shell environment initialization not needed on this platform");
+}
+
+/// Reject PATH entries that would break exec lookup. A "real" PATH entry is
+/// short (well under PATH_MAX), absolute, and contains no whitespace / control
+/// characters. Banner / MOTD text leaking into PATH from a shell's stdout is
+/// the usual source of bad entries; rejecting them here prevents
+/// `env <interpreter>` in shebangs from failing with ENAMETOOLONG.
+#[cfg(unix)]
+fn is_sane_path_entry(entry: &str) -> bool {
+    if entry.is_empty() || entry.len() > 1024 {
+        return false;
+    }
+    if !entry.starts_with('/') {
+        return false;
+    }
+    !entry
+        .chars()
+        .any(|c| c.is_control() || c == ' ' || c == '\t' || c == '\n')
 }
 
 /// Get NVM paths - scans ~/.nvm/versions/node for all installed versions
@@ -333,29 +351,46 @@ fn get_shell_path() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     debug!("User's default shell: {}", shell);
 
-    // Use -i -c (interactive mode) to ensure .zshrc is read
-    // This is critical because NVM initialization is typically in .zshrc, not .zprofile
-    // Note: -l -c (login + non-interactive) does NOT read .zshrc
+    // Use -i -c (interactive mode) to ensure .zshrc/.bashrc is read
+    // This is critical because NVM initialization is typically in rc files.
+    //
+    // Wrap PATH in unique markers so any MOTD / banner / login message that rc
+    // files print to stdout (e.g. /etc/custom-motd on some cloud images) does
+    // not get mixed into the captured value. Without this, stray text ends up
+    // split on ':' into bogus PATH entries and `env <binary>` in shebangs then
+    // fails with ENAMETOOLONG ("File name too long").
+    const START: &str = "__FROGCODE_PATH_START__";
+    const END: &str = "__FROGCODE_PATH_END__";
+    let script = format!("printf '%s%s%s\\n' '{START}' \"$PATH\" '{END}'");
+
     let mut cmd = Command::new(&shell);
-    cmd.args(["-i", "-c", "echo $PATH"]);
+    cmd.args(["-i", "-c", &script]);
 
     // Prevent interactive shell from waiting for input
     cmd.stdin(std::process::Stdio::null());
 
     match cmd.output() {
-        Ok(output) if output.status.success() => {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                info!("Got shell PATH ({} entries)", path.split(':').count());
-                debug!("Shell PATH: {}", path);
-                return Some(path);
-            }
-        }
         Ok(output) => {
-            debug!(
-                "Shell command failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let (Some(s), Some(e)) = (stdout.find(START), stdout.find(END)) {
+                let raw = &stdout[s + START.len()..e];
+                let path = raw.trim().to_string();
+                if !path.is_empty() {
+                    info!("Got shell PATH ({} entries)", path.split(':').count());
+                    debug!("Shell PATH: {}", path);
+                    return Some(path);
+                }
+            } else if !output.status.success() {
+                debug!(
+                    "Shell command failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            } else {
+                debug!(
+                    "Shell PATH markers not found; stdout had {} bytes",
+                    stdout.len()
+                );
+            }
         }
         Err(e) => {
             debug!("Failed to execute shell: {}", e);

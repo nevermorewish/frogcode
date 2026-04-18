@@ -161,9 +161,24 @@ function killOldSidecars(): void {
         } catch {}
       }
     } else {
-      // Unix: pkill by process title
+      // Unix: pgrep -f matches our own argv (`node frogcode-platform-sidecar.cjs ...`),
+      // so using `pkill -f` here would SIGTERM ourselves. Enumerate and skip self/parent.
       try {
-        execSync(`pkill -f "${SIDECAR_TITLE}" 2>/dev/null || true`, { timeout: 3000 });
+        const ourPid = process.pid;
+        const parentPid = typeof process.ppid === 'number' ? process.ppid : -1;
+        let raw = '';
+        try {
+          raw = execSync(`pgrep -f "${SIDECAR_TITLE}" 2>/dev/null || true`, {
+            encoding: 'utf8', timeout: 3000,
+          });
+        } catch {}
+        const pids = raw
+          .split(/\s+/)
+          .map((s) => parseInt(s, 10))
+          .filter((pid) => pid && pid !== ourPid && pid !== parentPid);
+        for (const pid of pids) {
+          try { process.kill(pid, 'SIGTERM'); } catch {}
+        }
       } catch {}
     }
   } catch (e: any) {

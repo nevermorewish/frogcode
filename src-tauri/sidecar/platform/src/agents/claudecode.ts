@@ -114,7 +114,17 @@ class ClaudeCodeSession implements AgentSession {
     args.push('--output-format', 'stream-json');
     args.push('--verbose');
     // v1: force bypass, matches current Rust impl. TODO: map config.mode
-    args.push('--dangerously-skip-permissions');
+    // Claude CLI refuses --dangerously-skip-permissions under root/sudo.
+    // On Linux-root, drop the flag so spawn doesn't hard-fail.
+    const isLinuxRoot =
+      process.platform === 'linux' &&
+      typeof process.getuid === 'function' &&
+      process.getuid() === 0;
+    if (!isLinuxRoot) {
+      args.push('--dangerously-skip-permissions');
+    } else {
+      log('warn', 'running as linux root; omitting --dangerously-skip-permissions');
+    }
     if (this.config.extraArgs?.length) {
       args.push(...this.config.extraArgs);
     }

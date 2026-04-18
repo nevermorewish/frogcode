@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "frog-code"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "anyhow",
  "arboard",

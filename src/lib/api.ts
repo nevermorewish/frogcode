@@ -4211,7 +4211,7 @@ export const api = {
   /**
    * Check installation status of development tools (Node.js, Git, Claude Code, etc.)
    */
-  async checkToolsInstalled(): Promise<{ tools: Array<{ id: string; name: string; installed: boolean; version: string | null; path: string | null; installable: boolean }> }> {
+  async checkToolsInstalled(): Promise<{ tools: Array<{ id: string; name: string; installed: boolean; version: string | null; path: string | null; installable: boolean; needs_upgrade: boolean }> }> {
     try {
       return await invoke("check_tools_installed");
     } catch (error) {

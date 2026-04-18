@@ -103,14 +103,40 @@ impl std::fmt::Display for OutputFormat {
     }
 }
 
+/// Returns true when running on Linux with effective uid 0.
+/// Reads `/proc/self/status` to avoid pulling in libc just for geteuid().
+#[cfg(target_os = "linux")]
+fn is_linux_root() -> bool {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Uid:"))
+                .and_then(|l| l.split_whitespace().nth(1).map(str::to_owned))
+                .and_then(|u| u.parse::<u32>().ok())
+        })
+        .map(|uid| uid == 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_linux_root() -> bool {
+    false
+}
+
 /// 权限构建辅助函数
 pub fn build_permission_args(config: &ClaudePermissionConfig) -> Vec<String> {
     let mut args = Vec::new();
 
     // 如果启用了危险跳过模式（向后兼容）
     if config.enable_dangerous_skip {
-        args.push("--dangerously-skip-permissions".to_string());
-        return args;
+        // Claude CLI hard-refuses --dangerously-skip-permissions when euid == 0.
+        // On Linux-root, omit the flag so spawn doesn't error out; fall through
+        // to the normal allowedTools / permission-mode path below.
+        if !is_linux_root() {
+            args.push("--dangerously-skip-permissions".to_string());
+            return args;
+        }
     }
 
     // 添加允许的工具

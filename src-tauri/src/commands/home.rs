@@ -10,6 +10,10 @@ pub struct ToolStatus {
     pub version: Option<String>,
     pub path: Option<String>,
     pub installable: bool,
+    /// True when the tool is installed but its version is below what downstream
+    /// tooling requires (e.g. Node < 22.14 breaks openclaw). Frontend shows a
+    /// "reinstall" CTA so the user can upgrade in place.
+    pub needs_upgrade: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,6 +32,67 @@ pub struct InstallResult {
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// openclaw's `package.json` declares `engines.node >= 22.14.0` and the
+/// runtime hard-rejects anything < v22.12. Pin to (major, minor) so we can
+/// reuse this in pre-install validation and version-based install fallback.
+const MIN_NODE_FOR_OPENCLAW: (u32, u32) = (22, 14);
+
+/// Linux Node bootstrap. Downloads Node 22 LTS tarball from Tsinghua mirror
+/// (npmmirror + nodejs.org as fallbacks) and overlay-installs into /usr/local.
+/// `apt-get install nodejs` on current LTS distros gives Node 18-20, which is
+/// too old for openclaw and modern claude-code.
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+const NODE_INSTALL_SCRIPT_LINUX: &str = r#"set -e
+VER=22.16.0
+ARCH=linux-x64
+TARBALL=node-v$VER-$ARCH.tar.xz
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+cd "$TMP"
+echo "Downloading Node v$VER..."
+ok=0
+for url in \
+  "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/v$VER/$TARBALL" \
+  "https://npmmirror.com/mirrors/node/v$VER/$TARBALL" \
+  "https://nodejs.org/dist/v$VER/$TARBALL" ; do
+  echo "  try: $url"
+  if curl -fSL --connect-timeout 20 --retry 2 -o "$TARBALL" "$url"; then
+    ok=1; break
+  fi
+done
+[ "$ok" = "1" ] || { echo "all Node mirrors failed" >&2; exit 1; }
+echo "Extracting..."
+tar -xJf "$TARBALL"
+DIR=node-v$VER-$ARCH
+if [ "$(id -u)" = "0" ]; then S=""; else S="sudo"; fi
+$S mkdir -p /usr/local/bin /usr/local/lib /usr/local/include /usr/local/share
+$S cp -rf "$DIR/bin/." /usr/local/bin/
+$S cp -rf "$DIR/lib/." /usr/local/lib/
+$S cp -rf "$DIR/include/." /usr/local/include/ 2>/dev/null || true
+$S cp -rf "$DIR/share/." /usr/local/share/ 2>/dev/null || true
+hash -r
+/usr/local/bin/node -v
+/usr/local/bin/npm -v
+echo "Node v$VER installed to /usr/local"
+"#;
+
+/// Parse a Node version string ("v22.18.0" or "22.18.0") into (major, minor).
+fn parse_node_version(s: &str) -> Option<(u32, u32)> {
+    let s = s.trim().trim_start_matches('v');
+    let mut it = s.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// Detect the currently-installed Node version as `(major, minor)`.
+/// Returns None if node is absent or the output cannot be parsed.
+fn detect_node_version() -> Option<(u32, u32)> {
+    let path = run_lookup("node")?;
+    let version = run_version(&path, &["--version"])?;
+    parse_node_version(&version)
+}
 
 /// Get the log file path: ~/.frogcode/install.log
 fn get_log_path() -> Option<std::path::PathBuf> {
@@ -390,17 +455,28 @@ fn check_tool(id: &str, name: &str, cmd: &str, args: &[&str], installable: bool)
     } else {
         None
     };
+    let installed = path.is_some();
+    let needs_upgrade = if id == "node" && installed {
+        version
+            .as_deref()
+            .and_then(parse_node_version)
+            .map(|v| v < MIN_NODE_FOR_OPENCLAW)
+            .unwrap_or(false)
+    } else {
+        false
+    };
     write_log(&format!(
-        "check_tool({}): path={:?}, version={:?}, installed={}",
-        id, path, version, path.is_some()
+        "check_tool({}): path={:?}, version={:?}, installed={}, needs_upgrade={}",
+        id, path, version, installed, needs_upgrade
     ));
     ToolStatus {
         id: id.to_string(),
         name: name.to_string(),
-        installed: path.is_some(),
+        installed,
         version,
         path,
         installable,
+        needs_upgrade,
     }
 }
 
@@ -598,7 +674,16 @@ Write-Host 'Node.js installed successfully'",
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         match tool_id {
-            "node" => Ok(("sh".to_string(), vec!["-c".into(), "sudo apt-get install -y nodejs npm || sudo dnf install -y nodejs npm".into()], false)),
+            "node" => {
+                // Distro packages (`apt-get install nodejs`) ship Node 18-20 on
+                // current LTS releases — too old for openclaw (>=22.14) and
+                // claude-code. Fetch a known-good Node 22 LTS tarball directly
+                // from Tsinghua mirror (most reliable from CN) with fallbacks,
+                // then overlay-install into /usr/local. Uses sudo only when
+                // not already root.
+                let script = NODE_INSTALL_SCRIPT_LINUX.to_string();
+                Ok(("sh".to_string(), vec!["-c".into(), script], false))
+            }
             "git" => Ok(("sh".to_string(), vec!["-c".into(), "sudo apt-get install -y git || sudo dnf install -y git".into()], false)),
             "claude" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@anthropic-ai/claude-code".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
             "codex" => Ok(("npm".to_string(), vec!["install".into(), "-g".into(), "@openai/codex".into(), "--registry".into(), "https://registry.npmmirror.com".into()], true)),
@@ -641,6 +726,33 @@ pub async fn install_tool(tool_id: String) -> Result<InstallResult, String> {
                     message: msg,
                     log_file,
                 });
+            }
+
+            // openclaw has a hard runtime check for Node >= 22.12 (its
+            // package.json declares >=22.14). Installing with an older node
+            // only to fail at first launch wastes a multi-minute npm install
+            // and leaves a broken binary — refuse up front.
+            if id == "openclaw" {
+                let detected = detect_node_version();
+                let (need_maj, need_min) = MIN_NODE_FOR_OPENCLAW;
+                let ok = detected.map(|v| v >= MIN_NODE_FOR_OPENCLAW).unwrap_or(false);
+                if !ok {
+                    let cur = detected
+                        .map(|(a, b)| format!("v{}.{}", a, b))
+                        .unwrap_or_else(|| "unknown".into());
+                    let msg = format!(
+                        "openclaw 需要 Node.js v{}.{}+，当前为 {}。请先升级 Node.js（可在本页重新安装 Node.js 自动升级到受支持版本）",
+                        need_maj, need_min, cur
+                    );
+                    write_log(&format!("FAILED: {}", msg));
+                    return Ok(InstallResult {
+                        success: false,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        message: msg,
+                        log_file,
+                    });
+                }
             }
         }
 

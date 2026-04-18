@@ -44,7 +44,7 @@ const MIN_NODE_FOR_OPENCLAW: (u32, u32) = (22, 14);
 /// too old for openclaw and modern claude-code.
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 const NODE_INSTALL_SCRIPT_LINUX: &str = r#"set -e
-VER=22.16.0
+VER=24.15.0
 ARCH=linux-x64
 TARBALL=node-v$VER-$ARCH.tar.xz
 TMP=$(mktemp -d)
@@ -546,7 +546,7 @@ fn get_install_command(tool_id: &str) -> Result<(String, Vec<String>, bool), Str
                 let ps_script = format!(
                     "$ErrorActionPreference='Stop'; \
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
-$nodeVersion='25.9.0'; \
+$nodeVersion='24.15.0'; \
 $arch='{}'; \
 $msiInstalled=$false; \
 $msi=Join-Path $env:TEMP \"node-v$nodeVersion-$arch.msi\"; \

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -508,11 +508,33 @@ const FrogclawCard: React.FC<{
   const {
     user, isAuthenticated, login, logout, tokens, systemProviders,
     engineTokens, selectEngineToken, openclawModels, feishuAppId,
+    ensureGroupToken,
   } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [switchingToken, setSwitchingToken] = useState(false);
+  const [claudeCodeMaxOnly, setClaudeCodeMaxOnly] = useState(() => {
+    try {
+      const stored = localStorage.getItem('claude_code_max_only');
+      return stored !== null ? stored === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+  const ensureTriggeredRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ enabled: boolean }>).detail;
+      if (detail && typeof detail.enabled === 'boolean') {
+        setClaudeCodeMaxOnly(detail.enabled);
+        ensureTriggeredRef.current.clear();
+      }
+    };
+    window.addEventListener('claude-code-max-only-toggle', handler);
+    return () => window.removeEventListener('claude-code-max-only-toggle', handler);
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -685,8 +707,43 @@ const FrogclawCard: React.FC<{
                         <SelectContent className="w-[--radix-select-trigger-width] min-w-[200px]">
                           {(() => {
                             const userGroup = user?.group || 'default';
+                            const requiredGroup =
+                              engine === 'openclaw' ? 'default'
+                                : (engine === 'claude' && claudeCodeMaxOnly) ? 'claude max'
+                                : null;
+                            const filterToken = (token: typeof tokens[0]) => {
+                              if (requiredGroup === 'default') {
+                                return token.group === 'default' || token.group === '';
+                              }
+                              if (requiredGroup === 'claude max') {
+                                return token.group === 'claude max';
+                              }
+                              return true;
+                            };
+                            const visibleTokens = tokens.filter(filterToken);
+
+                            if (visibleTokens.length === 0 && requiredGroup) {
+                              // Fire ensure-group once per (engine,group) pair.
+                              const key = `${engine}:${requiredGroup}`;
+                              if (!ensureTriggeredRef.current.has(key)) {
+                                ensureTriggeredRef.current.add(key);
+                                ensureGroupToken(requiredGroup).catch((err) => {
+                                  console.error('ensureGroupToken failed', err);
+                                  ensureTriggeredRef.current.delete(key);
+                                });
+                              }
+                              return (
+                                <div className="px-3 py-2 text-[11px] text-muted-foreground">
+                                  {t('home.frogclaw.creatingGroupToken', {
+                                    defaultValue: '正在创建 {{group}} 分组令牌...',
+                                    group: requiredGroup,
+                                  })}
+                                </div>
+                              );
+                            }
+
                             const grouped = new Map<string, typeof tokens>();
-                            for (const token of tokens) {
+                            for (const token of visibleTokens) {
                               const g = token.group || userGroup;
                               if (!grouped.has(g)) grouped.set(g, []);
                               grouped.get(g)!.push(token);
@@ -707,7 +764,7 @@ const FrogclawCard: React.FC<{
                               );
                             };
                             if (groups.length <= 1) {
-                              return tokens.map(renderTokenItem);
+                              return visibleTokens.map(renderTokenItem);
                             }
                             return groups.map(([group, groupTokens]) => (
                               <SelectGroup key={group}>

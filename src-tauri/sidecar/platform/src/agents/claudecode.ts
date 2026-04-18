@@ -160,12 +160,41 @@ class ClaudeCodeSession implements AgentSession {
     const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
     let sawAny = false;
     let sawResult = false;
+    let emittedResult = false;
     let sawError = false;
     let lastDurationMs: number | undefined;
 
-    const emit = (evt: AgentEvent) => this.emitter.emit('event', evt);
+    const emit = (evt: AgentEvent) => {
+      if (evt.type === 'result') emittedResult = true;
+      this.emitter.emit('event', evt);
+    };
+
+    // Watchdog: if claude produces no stdout for IDLE_TIMEOUT_MS, kill it.
+    // Protects against libuv native crashes / hung resume sessions on Windows
+    // where the child neither emits JSONL nor exits cleanly, leaving the
+    // Feishu card stuck on "Running..." forever.
+    const IDLE_TIMEOUT_MS = 180_000;
+    let watchdog: NodeJS.Timeout | null = null;
+    let timedOut = false;
+    const resetWatchdog = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        timedOut = true;
+        log('warn', `idle timeout ${IDLE_TIMEOUT_MS}ms, killing claude pid=${child.pid}`);
+        try { child.kill(isWindows ? undefined : 'SIGTERM'); } catch {}
+        // Force-exit if graceful kill didn't land within 5s
+        setTimeout(() => {
+          if (!child.killed && child.exitCode === null) {
+            try { child.kill('SIGKILL' as any); } catch {}
+          }
+        }, 5_000).unref?.();
+      }, IDLE_TIMEOUT_MS);
+      watchdog.unref?.();
+    };
+    resetWatchdog();
 
     rl.on('line', (raw) => {
+      resetWatchdog();
       const trimmed = raw.trim();
       if (!trimmed) return;
       let msg: any;
@@ -297,20 +326,34 @@ class ClaudeCodeSession implements AgentSession {
     // Wait for process exit
     await new Promise<void>((resolve) => {
       child.on('close', (code) => {
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
         rl.close();
         this.currentChild = null;
 
-        // If we never saw a `result` event, synthesize one so the UI finalizes
-        if (!sawResult) {
-          sawError = code !== 0 && code !== null;
-          const stderr = stderrBuf.join('').slice(-500);
-          if (sawError) {
+        const stderr = stderrBuf.join('').slice(-500);
+        const exitedAbnormally = code !== 0 && code !== null;
+
+        // Always make sure the card finalizes. Previously we only synthesized
+        // a result when !sawResult, but suppressErrorResult can leave
+        // sawResult=true with no emit, and a timeout/crash after a partial
+        // stream can also leave emittedResult=false. Gate on emittedResult.
+        if (!emittedResult) {
+          if (timedOut) {
+            sawError = true;
+            emit({
+              type: 'result',
+              durationMs: lastDurationMs ?? Date.now() - startedAt,
+              error: `claude 无响应超时 (${Math.round(IDLE_TIMEOUT_MS / 1000)}s)，已强制终止。可能 Node/libuv 崩溃或 resume session 损坏。${stderr ? '\n' + stderr : ''}`,
+            });
+          } else if (exitedAbnormally) {
+            sawError = true;
             emit({
               type: 'result',
               durationMs: lastDurationMs ?? Date.now() - startedAt,
               error: stderr || `claude exited with code ${code}`,
             });
           } else if (!sawAny) {
+            sawError = true;
             emit({
               type: 'result',
               durationMs: lastDurationMs ?? Date.now() - startedAt,
@@ -323,19 +366,30 @@ class ClaudeCodeSession implements AgentSession {
               durationMs: lastDurationMs ?? Date.now() - startedAt,
             });
           }
+        } else if (exitedAbnormally && !sawError) {
+          // Result already emitted as success, but process then crashed.
+          // Surface the crash as a warning so we don't silently swallow it.
+          log('warn', `result emitted but process crashed with code ${code}: ${stderr.slice(-200)}`);
+          sawError = true;
         }
-        log('info', `exit code=${code} sawResult=${sawResult} sawError=${sawError}`);
+        log(
+          'info',
+          `exit code=${code} sawResult=${sawResult} emittedResult=${emittedResult} timedOut=${timedOut} sawError=${sawError}`,
+        );
         resolve();
       });
       child.on('error', (err) => {
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
         rl.close();
         this.currentChild = null;
         sawError = true;
-        emit({
-          type: 'result',
-          durationMs: Date.now() - startedAt,
-          error: `spawn failed: ${err.message}`,
-        });
+        if (!emittedResult) {
+          emit({
+            type: 'result',
+            durationMs: Date.now() - startedAt,
+            error: `spawn failed: ${err.message}`,
+          });
+        }
         resolve();
       });
     });

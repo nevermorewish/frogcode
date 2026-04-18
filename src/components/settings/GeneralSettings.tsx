@@ -52,6 +52,16 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
     }
   });
 
+  // Claude Code max-group-only state
+  const [claudeCodeMaxOnly, setClaudeCodeMaxOnly] = useState(() => {
+    try {
+      const stored = localStorage.getItem('claude_code_max_only');
+      return stored !== null ? stored === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
   /**
    * 初始化时加载当前 Codex 路径，并在 refresh 事件触发时同步
    */
@@ -245,6 +255,21 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
     }
   };
 
+  /**
+   * Handle Claude Code max-only toggle
+   */
+  const handleClaudeCodeMaxOnlyToggle = (checked: boolean) => {
+    setClaudeCodeMaxOnly(checked);
+    try {
+      localStorage.setItem('claude_code_max_only', checked.toString());
+      window.dispatchEvent(
+        new CustomEvent('claude-code-max-only-toggle', { detail: { enabled: checked } }),
+      );
+    } catch {
+      // Ignore localStorage errors
+    }
+  };
+
   return (
     <Card className="p-6 space-y-6">
       <div>
@@ -359,6 +384,21 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
               id="promptSuggestion"
               checked={enablePromptSuggestion}
               onCheckedChange={handlePromptSuggestionToggle}
+            />
+          </div>
+
+          {/* Claude Code: restrict to Claude Max token group */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5 flex-1">
+              <Label htmlFor="claudeCodeMaxOnly">{t('generalSettings.claudeCodeMaxOnly')}</Label>
+              <p className="text-xs text-muted-foreground">
+                {t('generalSettings.claudeCodeMaxOnlyDescription')}
+              </p>
+            </div>
+            <Switch
+              id="claudeCodeMaxOnly"
+              checked={claudeCodeMaxOnly}
+              onCheckedChange={handleClaudeCodeMaxOnlyToggle}
             />
           </div>
 

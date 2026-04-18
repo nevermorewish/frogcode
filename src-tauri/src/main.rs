@@ -16,7 +16,7 @@ use claude_binary::init_shell_environment;
 
 use std::sync::{Arc, Mutex};
 
-use commands::auth::{login_to_frogclaw, fetch_frogclaw_providers, apply_openclaw_config};
+use commands::auth::{login_to_frogclaw, fetch_frogclaw_providers, ensure_frogclaw_group_token, apply_openclaw_config};
 use commands::default_skills::{install_default_skills, install_openclaw_defaults};
 use commands::home::{check_tools_installed, install_tool};
 use commands::openclaw_history::{scan_openclaw_history_sessions, load_openclaw_history_session};
@@ -831,6 +831,7 @@ fn main() {
             // Frogclaw Authentication
             login_to_frogclaw,
             fetch_frogclaw_providers,
+            ensure_frogclaw_group_token,
             apply_openclaw_config,
             // Home page tool detection
             check_tools_installed,

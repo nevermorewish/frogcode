@@ -13,7 +13,6 @@ import {
   User,
   Home,
   ScrollText,
-  Radio,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { View } from '@/types/navigation';
@@ -35,6 +34,33 @@ const OpenClawIcon: React.FC<{ className?: string; strokeWidth?: number }> = ({ 
     <circle cx="75" cy="35" r="6" fill="#050810" />
     <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
     <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
+  </svg>
+);
+
+const FeishuIcon: React.FC<{ className?: string; strokeWidth?: number }> = ({ className }) => (
+  <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <defs>
+      <linearGradient id="sidebar-feishu" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stopColor="#00d6b9" />
+        <stop offset="55%" stopColor="#00b6f0" />
+        <stop offset="100%" stopColor="#3370ff" />
+      </linearGradient>
+    </defs>
+    <rect x="8" y="8" width="104" height="104" rx="26" fill="url(#sidebar-feishu)" />
+    <path
+      d="M34 46 Q60 26 86 46 Q96 52 96 62 Q96 82 74 88 L46 88 Q28 86 28 68 Q28 56 34 46 Z"
+      fill="#ffffff"
+      opacity="0.96"
+    />
+    <path
+      d="M42 62 Q60 52 78 62"
+      stroke="#0086ff"
+      strokeWidth="5"
+      strokeLinecap="round"
+      fill="none"
+    />
+    <circle cx="52" cy="74" r="3.5" fill="#0086ff" />
+    <circle cx="68" cy="74" r="3.5" fill="#0086ff" />
   </svg>
 );
 import { useTranslation } from 'react-i18next';
@@ -107,7 +133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { view: 'usage-dashboard', icon: BarChart2, label: t('sidebar.usageStats') },
     { view: 'mcp', icon: Layers, label: t('sidebar.mcpTools') },
     { view: 'openclaw-sessions', icon: OpenClawIcon, label: 'OpenClaw' },
-    { view: 'im-channels', icon: Radio, label: t('sidebar.imChannels', 'IM 通道') },
+    { view: 'im-channels', icon: FeishuIcon, label: t('sidebar.imChannels', 'IM 通道') },
     { view: 'logs', icon: ScrollText, label: t('sidebar.logs', '日志') },
     { view: 'claude-extensions', icon: Package, label: t('sidebar.extensions') },
   ];

@@ -139,12 +139,11 @@ pub async fn login_to_frogclaw(username: String, password: String) -> Result<Use
         .ok_or_else(|| "Login succeeded but no user data returned".to_string())
 }
 
-#[tauri::command]
-pub async fn fetch_frogclaw_providers(
-    username: String,
-    password: String,
-) -> Result<FrogclawLoginSession, String> {
-    // Create client with cookie store for session-based auth
+/// Establish a session-authenticated client. Returns the http client and the logged-in user.
+async fn login_and_client(
+    username: &str,
+    password: &str,
+) -> Result<(Client, UserData), String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(20))
         .cookie_store(true)
@@ -152,13 +151,12 @@ pub async fn fetch_frogclaw_providers(
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    // Step 1: Login to establish session
     let login_url = format!("{}/api/user/login", FROGCLAW_BASE_URL);
     let login_resp = client
         .post(&login_url)
         .json(&LoginBody {
-            username: username.clone(),
-            password: password.clone(),
+            username: username.to_string(),
+            password: password.to_string(),
         })
         .send()
         .await
@@ -181,10 +179,16 @@ pub async fn fetch_frogclaw_providers(
         .data
         .ok_or_else(|| "Login succeeded but no user data returned".to_string())?;
 
-    let user_id = user.id.to_string();
-    auth_log("login", &format!("用户 {} ({}) 登录成功", user.username, user_id));
+    Ok((client, user))
+}
 
-    // Step 2: Fetch user's tokens
+/// Fetch tokens + system providers + cli providers for an authenticated session.
+async fn fetch_session_data(
+    client: &Client,
+    user: UserData,
+) -> Result<FrogclawLoginSession, String> {
+    let user_id = user.id.to_string();
+
     let tokens_url = format!("{}/api/token/?p=0&size=100", FROGCLAW_BASE_URL);
     let tokens_resp = client
         .get(&tokens_url)
@@ -208,7 +212,7 @@ pub async fn fetch_frogclaw_providers(
                 .and_then(|d| d.items)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|t| t.status == 1) // Only enabled tokens
+                .filter(|t| t.status == 1)
                 .collect()
         } else {
             Vec::new()
@@ -217,7 +221,6 @@ pub async fn fetch_frogclaw_providers(
         Vec::new()
     };
 
-    // Step 3: Fetch system CLI providers
     let providers_url = format!("{}/api/system-cli-provider/", FROGCLAW_BASE_URL);
     let providers_resp = client
         .get(&providers_url)
@@ -244,7 +247,6 @@ pub async fn fetch_frogclaw_providers(
         Vec::new()
     };
 
-    // Step 4: Fetch CLI providers (openclaw config, etc.)
     let cli_url = format!("{}/api/cli-provider/?p=0&page_size=100", FROGCLAW_BASE_URL);
     let cli_resp = client
         .get(&cli_url)
@@ -271,18 +273,96 @@ pub async fn fetch_frogclaw_providers(
         _ => Vec::new(),
     };
 
-    let oc_count = cli_providers.iter().filter(|p| p.provider_type == "openclaw").count();
-    auth_log("fetch", &format!(
-        "获取完成: {} tokens, {} system providers, {} cli providers ({} openclaw)",
-        tokens.len(), system_providers.len(), cli_providers.len(), oc_count
-    ));
-
     Ok(FrogclawLoginSession {
         user,
         tokens,
         system_providers,
         cli_providers,
     })
+}
+
+#[tauri::command]
+pub async fn fetch_frogclaw_providers(
+    username: String,
+    password: String,
+) -> Result<FrogclawLoginSession, String> {
+    let (client, user) = login_and_client(&username, &password).await?;
+    let user_id = user.id.to_string();
+    auth_log("login", &format!("用户 {} ({}) 登录成功", user.username, user_id));
+
+    let session = fetch_session_data(&client, user).await?;
+
+    let oc_count = session
+        .cli_providers
+        .iter()
+        .filter(|p| p.provider_type == "openclaw")
+        .count();
+    auth_log(
+        "fetch",
+        &format!(
+            "获取完成: {} tokens, {} system providers, {} cli providers ({} openclaw)",
+            session.tokens.len(),
+            session.system_providers.len(),
+            session.cli_providers.len(),
+            oc_count
+        ),
+    );
+
+    Ok(session)
+}
+
+#[tauri::command]
+pub async fn ensure_frogclaw_group_token(
+    username: String,
+    password: String,
+    group: String,
+) -> Result<FrogclawLoginSession, String> {
+    let group = if group.is_empty() { "default".to_string() } else { group };
+
+    let (client, user) = login_and_client(&username, &password).await?;
+    let user_id = user.id.to_string();
+
+    #[derive(Serialize)]
+    struct EnsureBody<'a> {
+        group: &'a str,
+    }
+
+    let ensure_url = format!("{}/api/token/ensure-group", FROGCLAW_BASE_URL);
+    let ensure_resp = client
+        .post(&ensure_url)
+        .header("New-Api-User", &user_id)
+        .json(&EnsureBody { group: &group })
+        .send()
+        .await
+        .map_err(|e| format!("ensure-group request failed: {}", e))?;
+
+    if !ensure_resp.status().is_success() {
+        return Err(format!(
+            "ensure-group server error: {}",
+            ensure_resp.status()
+        ));
+    }
+
+    let ensure_result: FrogclawResponse<Value> = ensure_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse ensure-group response: {}", e))?;
+
+    if !ensure_result.success {
+        auth_log(
+            "ensure-group",
+            &format!("group={} 失败: {}", group, ensure_result.message),
+        );
+        return Err(ensure_result.message);
+    }
+
+    auth_log(
+        "ensure-group",
+        &format!("group={} 已新建/复用", group),
+    );
+
+    // Refetch everything so the frontend gets the new token in context.
+    fetch_session_data(&client, user).await
 }
 
 #[tauri::command]

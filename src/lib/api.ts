@@ -4472,6 +4472,10 @@ export const api = {
     return await invoke<FrogclawLoginSession>("fetch_frogclaw_providers", { username, password });
   },
 
+  async ensureFrogclawGroupToken(username: string, password: string, group: string): Promise<FrogclawLoginSession> {
+    return await invoke<FrogclawLoginSession>("ensure_frogclaw_group_token", { username, password, group });
+  },
+
   async applyOpenclawConfig(configJson: string): Promise<void> {
     return await invoke<void>("apply_openclaw_config", { configJson });
   },

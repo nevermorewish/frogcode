@@ -26,6 +26,7 @@ interface AuthContextType {
   selectEngineToken: (engine: EngineId, tokenId: number) => Promise<void>;
   refreshProviders: () => Promise<void>;
   getRecommendedGroup: (engine: EngineId) => string | null;
+  ensureGroupToken: (group: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -38,6 +39,19 @@ const AUTH_ENGINE_TOKENS_KEY = 'frogclaw_engine_tokens';
 const AUTH_OPENCLAW_MODELS_KEY = 'frogclaw_openclaw_models';
 const AUTH_FEISHU_APPID_KEY = 'frogclaw_feishu_appid';
 const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
+const CLAUDE_MAX_GROUP = 'claude max';
+const OPENCLAW_GROUP = 'default';
+const CLAUDE_MAX_ONLY_KEY = 'claude_code_max_only';
+
+function getClaudeMaxOnly(): boolean {
+  try {
+    const raw = localStorage.getItem(CLAUDE_MAX_ONLY_KEY);
+    if (raw === null) return true;
+    return raw === 'true';
+  } catch {
+    return true;
+  }
+}
 
 function extractOpenclawInfo(cliProviders: FrogclawCliProvider[]): {
   models: OpenClawModelInfo[];
@@ -137,10 +151,20 @@ function autoSelectTokens(
 
   const result: EngineTokenMap = {};
   const engines: EngineId[] = ['claude', 'codex', 'gemini'];
+  const claudeMaxOnly = getClaudeMaxOnly();
 
   for (const engine of engines) {
     const hasProvider = systemProviders.some(sp => PROVIDER_KEY_MAP[sp.provider_key] === engine);
     if (!hasProvider) continue;
+
+    // Claude Code is hard-restricted to the claude max group when the toggle is on.
+    if (engine === 'claude' && claudeMaxOnly) {
+      const match = tokens.find(t => t.group === CLAUDE_MAX_GROUP);
+      if (match) {
+        result[engine] = match.id;
+      }
+      continue;
+    }
 
     const recommendedGroup = getRecommendedGroupFromProviders(engine, systemProviders);
     if (recommendedGroup) {
@@ -153,14 +177,40 @@ function autoSelectTokens(
     result[engine] = tokens[0].id;
   }
 
-  // OpenClaw
+  // OpenClaw is locked to the default group.
   const hasOpenclaw = cliProviders.some(p => p.provider_type === 'openclaw');
   if (hasOpenclaw) {
-    const match = tokens.find(t => t.group === 'default' || t.group === '');
-    result.openclaw = match?.id ?? tokens[0].id;
+    const match = tokens.find(t => t.group === OPENCLAW_GROUP || t.group === '');
+    if (match) {
+      result.openclaw = match.id;
+    }
   }
 
   return result;
+}
+
+/** Determine which token groups must exist but currently have no token. */
+function findMissingGroups(
+  tokens: FrogclawToken[],
+  cliProviders: FrogclawCliProvider[],
+  systemProviders: FrogclawSystemProvider[],
+): string[] {
+  const missing = new Set<string>();
+  const claudeMaxOnly = getClaudeMaxOnly();
+
+  const hasOpenclaw = cliProviders.some(p => p.provider_type === 'openclaw');
+  if (hasOpenclaw && !tokens.some(t => t.group === OPENCLAW_GROUP || t.group === '')) {
+    missing.add(OPENCLAW_GROUP);
+  }
+
+  const hasClaudeProvider = systemProviders.some(
+    sp => PROVIDER_KEY_MAP[sp.provider_key] === 'claude',
+  );
+  if (claudeMaxOnly && hasClaudeProvider && !tokens.some(t => t.group === CLAUDE_MAX_GROUP)) {
+    missing.add(CLAUDE_MAX_GROUP);
+  }
+
+  return Array.from(missing);
 }
 
 async function setupProviders(
@@ -415,7 +465,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const { u, p } = JSON.parse(atob(cred));
       api.fetchFrogclawProviders(u, p)
-        .then((session) => {
+        .then(async (initialSession) => {
+          // Auto-provision missing required groups before applying state.
+          let session = initialSession;
+          const missing = findMissingGroups(
+            session.tokens, session.cli_providers, session.system_providers,
+          );
+          for (const group of missing) {
+            try {
+              session = await api.ensureFrogclawGroupToken(u, p, group);
+            } catch (err) {
+              console.error(`[Auth] startup ensureFrogclawGroupToken(${group}) failed:`, err);
+            }
+          }
+
           setUser(session.user);
           setTokens(session.tokens);
           setSystemProviders(session.system_providers);
@@ -471,12 +534,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    const session = await api.fetchFrogclawProviders(username, password);
+    let session = await api.fetchFrogclawProviders(username, password);
+
+    localStorage.setItem(AUTH_CRED_KEY, btoa(JSON.stringify({ u: username, p: password })));
+
+    // Auto-provision missing required groups (openclaw=default, claude=claude max).
+    const missing = findMissingGroups(
+      session.tokens, session.cli_providers, session.system_providers,
+    );
+    for (const group of missing) {
+      try {
+        session = await api.ensureFrogclawGroupToken(username, password, group);
+      } catch (err) {
+        console.error(`[Auth] ensureFrogclawGroupToken(${group}) failed:`, err);
+      }
+    }
+
     setUser(session.user);
     setTokens(session.tokens);
     setSystemProviders(session.system_providers);
 
-    localStorage.setItem(AUTH_CRED_KEY, btoa(JSON.stringify({ u: username, p: password })));
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(session.user));
     localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
 
@@ -493,6 +570,44 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       await setupProviders(session.system_providers, session.tokens, autoTokens);
     }
   }, []);
+
+  /** Ensure a given token group has at least one active token on the server. */
+  const ensureGroupToken = useCallback(async (group: string) => {
+    const cred = localStorage.getItem(AUTH_CRED_KEY);
+    if (!cred) return;
+    let u: string, p: string;
+    try {
+      const parsed = JSON.parse(atob(cred));
+      u = parsed.u; p = parsed.p;
+    } catch {
+      return;
+    }
+
+    try {
+      const session = await api.ensureFrogclawGroupToken(u, p, group);
+      setTokens(session.tokens);
+      setSystemProviders(session.system_providers);
+      localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+
+      const autoTokens = autoSelectTokens(
+        session.tokens, session.system_providers, session.cli_providers,
+      );
+      // Merge: keep any explicit user choices that still reference valid tokens.
+      const validIds = new Set(session.tokens.map(t => t.id));
+      const preserved: EngineTokenMap = {};
+      for (const [engine, tokenId] of Object.entries(engineTokens)) {
+        if (tokenId && validIds.has(tokenId)) {
+          preserved[engine as EngineId] = tokenId;
+        }
+      }
+      const merged = { ...autoTokens, ...preserved };
+      setEngineTokens(merged);
+      localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(merged));
+      await setupProviders(session.system_providers, session.tokens, merged);
+    } catch (err) {
+      console.error(`[Auth] ensureGroupToken(${group}) failed:`, err);
+    }
+  }, [engineTokens]);
 
   /** Switch a single engine's token */
   const selectEngineToken = useCallback(async (engine: EngineId, tokenId: number) => {
@@ -614,6 +729,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       selectEngineToken,
       refreshProviders,
       getRecommendedGroup,
+      ensureGroupToken,
     }}>
       {children}
     </AuthContext.Provider>

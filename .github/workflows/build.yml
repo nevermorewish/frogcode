@@ -136,6 +136,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -203,9 +208,43 @@ jobs:
             echo "Renamed: $LINUX_APPIMAGE_SIG -> $LINUX_DIR/frog-code_${VERSION}_amd64.AppImage.sig"
           fi
 
+          # Find and rename Linux deb package (Frog.Code_*.deb -> frog-code_*_amd64.deb)
+          LINUX_DEB=$(find artifacts -name "*.deb" ! -name "*.sig" -type f | head -n 1)
+          if [ -n "$LINUX_DEB" ]; then
+            LINUX_DIR=$(dirname "$LINUX_DEB")
+            mv "$LINUX_DEB" "$LINUX_DIR/frog-code_${VERSION}_amd64.deb"
+            echo "Renamed: $LINUX_DEB -> $LINUX_DIR/frog-code_${VERSION}_amd64.deb"
+          fi
+
           echo "All updater files renamed successfully"
           echo "Signature files:"
           find artifacts -name "*.sig" -type f
+
+      - name: Sign .deb for Linux auto-update
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DEB_FILE=$(find artifacts -name "frog-code_${VERSION}_amd64.deb" -type f | head -n 1)
+          if [ -z "$DEB_FILE" ]; then
+            echo "::error::No renamed .deb found to sign (expected frog-code_${VERSION}_amd64.deb)"
+            exit 1
+          fi
+          echo "Signing: $DEB_FILE"
+
+          # tauri signer sign writes <file>.sig next to the input file.
+          # --private-key accepts the key string directly; password via env var.
+          bunx @tauri-apps/cli@^2 signer sign \
+            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+            --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+            "$DEB_FILE"
+
+          if [ ! -f "${DEB_FILE}.sig" ]; then
+            echo "::error::Expected ${DEB_FILE}.sig was not produced"
+            exit 1
+          fi
+          echo "Produced $(ls -la "${DEB_FILE}.sig")"
 
       - name: Generate latest.json for updater
         run: |
@@ -215,18 +254,22 @@ jobs:
           # Get current date in RFC 3339 format
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Find signature files (after renaming)
+          # Find signature files (after renaming + .deb signing)
           DARWIN_AARCH64_SIG=$(find artifacts -name "*_aarch64.app.tar.gz.sig" -type f | head -n 1)
           DARWIN_X64_SIG=$(find artifacts -name "*_x64.app.tar.gz.sig" -type f | head -n 1)
-          LINUX_SIG=$(find artifacts -name "*.AppImage.sig" -type f | head -n 1)
+          LINUX_APPIMAGE_SIG=$(find artifacts -name "*.AppImage.sig" -type f | head -n 1)
+          LINUX_DEB_SIG=$(find artifacts -name "*.deb.sig" -type f | head -n 1)
           WINDOWS_MSI_SIG=$(find artifacts -name "*.msi.sig" -type f | head -n 1)
           WINDOWS_NSIS_SIG=$(find artifacts -name "*-setup.exe.sig" -type f | head -n 1)
 
           # Fail fast if any required signature file is missing.
+          # linux-x86_64 is served as .deb (dpkg-installed is the dominant case; AppImage users
+          # would have their binary overwritten by .deb bytes via install_appimage since Tauri
+          # cannot distinguish install types from one manifest entry).
           missing=0
           if [ -z "$DARWIN_AARCH64_SIG" ]; then echo "::error::Missing signature file for darwin-aarch64 (*.app.tar.gz.sig)"; missing=1; fi
           if [ -z "$DARWIN_X64_SIG" ]; then echo "::error::Missing signature file for darwin-x86_64 (*.app.tar.gz.sig)"; missing=1; fi
-          if [ -z "$LINUX_SIG" ]; then echo "::error::Missing signature file for linux-x86_64 (*.AppImage.sig)"; missing=1; fi
+          if [ -z "$LINUX_DEB_SIG" ]; then echo "::error::Missing signature file for linux-x86_64 (*.deb.sig — produced by the 'Sign .deb' step)"; missing=1; fi
           if [ -z "$WINDOWS_NSIS_SIG" ]; then echo "::error::Missing signature file for windows-x86_64 (*-setup.exe.sig)"; missing=1; fi
           if [ "$missing" -ne 0 ]; then
             echo "Updater signatures are required. Ensure bundle.createUpdaterArtifacts=true and TAURI_SIGNING_PRIVATE_KEY is set during build."
@@ -236,7 +279,7 @@ jobs:
           # Read signatures
           DARWIN_AARCH64_SIGNATURE=$(cat "$DARWIN_AARCH64_SIG")
           DARWIN_X64_SIGNATURE=$(cat "$DARWIN_X64_SIG")
-          LINUX_SIGNATURE=$(cat "$LINUX_SIG")
+          LINUX_DEB_SIGNATURE=$(cat "$LINUX_DEB_SIG")
           WINDOWS_MSI_SIGNATURE=$(cat "$WINDOWS_MSI_SIG" 2>/dev/null || echo "")
           WINDOWS_NSIS_SIGNATURE=$(cat "$WINDOWS_NSIS_SIG")
 
@@ -244,7 +287,7 @@ jobs:
           empty=0
           if [ -z "$DARWIN_AARCH64_SIGNATURE" ]; then echo "::error::Empty signature content for darwin-aarch64"; empty=1; fi
           if [ -z "$DARWIN_X64_SIGNATURE" ]; then echo "::error::Empty signature content for darwin-x86_64"; empty=1; fi
-          if [ -z "$LINUX_SIGNATURE" ]; then echo "::error::Empty signature content for linux-x86_64"; empty=1; fi
+          if [ -z "$LINUX_DEB_SIGNATURE" ]; then echo "::error::Empty signature content for linux-x86_64 (.deb)"; empty=1; fi
           if [ -z "$WINDOWS_NSIS_SIGNATURE" ]; then echo "::error::Empty signature content for windows-x86_64"; empty=1; fi
           if [ "$empty" -ne 0 ]; then
             echo "Refusing to publish an updater manifest with empty signatures."
@@ -267,8 +310,8 @@ jobs:
                 "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_x64.app.tar.gz"
               },
               "linux-x86_64": {
-                "signature": "$LINUX_SIGNATURE",
-                "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_amd64.AppImage"
+                "signature": "$LINUX_DEB_SIGNATURE",
+                "url": "https://frogclaw.com/downloads/${VERSION}/frog-code_${VERSION}_amd64.deb"
               },
               "windows-x86_64": {
                 "signature": "$WINDOWS_NSIS_SIGNATURE",
@@ -299,7 +342,7 @@ jobs:
           find artifacts -type f \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
             -o -name "*.msi" -o -name "*.msi.sig" -o -name "*-setup.exe" -o -name "*-setup.exe.sig" \
             -o -name "*-portable.exe" -o -name "*.AppImage" -o -name "*.AppImage.sig" \
-            -o -name "*.deb" -o -name "*.rpm" \) -exec gh release upload ${{ github.ref_name }} {} --clobber \;
+            -o -name "*.deb" -o -name "*.deb.sig" -o -name "*.rpm" \) -exec gh release upload ${{ github.ref_name }} {} --clobber \;
           gh release upload ${{ github.ref_name }} latest.json --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -342,6 +385,7 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.AppImage.sig
             artifacts/**/*.deb
+            artifacts/**/*.deb.sig
             artifacts/**/*.rpm
             latest.json
         env:
@@ -376,7 +420,7 @@ jobs:
           find artifacts -type f \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
             -o -name "*.msi" -o -name "*.msi.sig" -o -name "*-setup.exe" -o -name "*-setup.exe.sig" \
             -o -name "*-portable.exe" -o -name "*.AppImage" -o -name "*.AppImage.sig" \
-            -o -name "*.deb" -o -name "*.rpm" \) -exec scp $SSH_OPTS {} "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/" \;
+            -o -name "*.deb" -o -name "*.deb.sig" -o -name "*.rpm" \) -exec scp $SSH_OPTS {} "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/" \;
 
           # Upload latest.json to both version dir and downloads root
           scp $SSH_OPTS latest.json "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"

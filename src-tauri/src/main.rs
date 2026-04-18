@@ -187,7 +187,173 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_window_state::Builder as WindowStatePlugin;
 
+/// Drop guard that removes our pidfile on scope exit.
+/// Kept alive inside main() for the lifetime of the Tauri app.
+struct PidFileGuard {
+    path: Option<std::path::PathBuf>,
+}
+
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        if let Some(p) = self.path.take() {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
+/// User-scoped pidfile path. Per-user so multiple Linux accounts on the
+/// same host don't collide, and per-platform so we don't hardcode /tmp on
+/// Windows.
+fn pidfile_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let temp = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Windows\\Temp".to_string());
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+        std::path::PathBuf::from(format!("{}\\frog-code-{}.pid", temp, user))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // UID, then USER fallback. /tmp is world-writable-with-sticky so
+        // per-uid suffix prevents collision and permission clash.
+        let uid = unsafe { libc_getuid() };
+        std::path::PathBuf::from(format!("/tmp/frog-code-{}.pid", uid))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn libc_getuid() -> u32 {
+    // Avoid adding the libc crate just for getuid(). Read /proc/self/loginuid
+    // on Linux; fall back to the USER env on macOS. This is only used to
+    // build a stable per-user suffix for the pidfile, so exact uid isn't
+    // required — stability is.
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(raw) = std::fs::read_to_string("/proc/self/loginuid") {
+            if let Ok(n) = raw.trim().parse::<u32>() {
+                // loginuid of -1 (u32::MAX) means "not set"; fall through.
+                if n != u32::MAX {
+                    return n;
+                }
+            }
+        }
+        if let Ok(raw) = std::fs::read_to_string("/proc/self/status") {
+            for line in raw.lines() {
+                if let Some(rest) = line.strip_prefix("Uid:") {
+                    if let Some(first) = rest.split_whitespace().next() {
+                        if let Ok(n) = first.parse::<u32>() {
+                            return n;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // macOS (or /proc read failed): hash USER env var.
+    let user = std::env::var("USER").unwrap_or_else(|_| "default".to_string());
+    // Stable non-cryptographic 32-bit fold.
+    let mut h: u32 = 0;
+    for b in user.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    h
+}
+
+/// Return true if a process with this pid is currently alive.
+/// Used to decide whether a pidfile is stale.
+fn process_is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::path::Path::new(&format!("/proc/{}", pid)).exists()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+            .output();
+        match out {
+            Ok(o) => {
+                let s = String::from_utf8_lossy(&o.stdout);
+                // tasklist prints "INFO: No tasks are running..." when the
+                // PID isn't found. A live match includes the pid number.
+                s.contains(&pid.to_string())
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Try to acquire a filesystem-based lock. Returns:
+///   * Ok(Some(guard)) — we hold the lock, free to continue booting.
+///   * Ok(None)        — another live frog-code process already owns it.
+///   * Err(reason)     — pidfile setup failed (caller should warn + continue).
+///
+/// This exists because `tauri-plugin-single-instance` uses dbus on Linux,
+/// which is typically absent in SSH/headless sessions, so two launches can
+/// race and share ~/.frogcode state.
+fn acquire_pidfile_lock() -> Result<Option<PidFileGuard>, String> {
+    let path = pidfile_path();
+
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(old_pid) = raw.trim().parse::<u32>() {
+            if old_pid != std::process::id() && process_is_alive(old_pid) {
+                eprintln!(
+                    "frog-code is already running (pid {}, pidfile {}). \
+                     Refusing to start a second instance.",
+                    old_pid,
+                    path.display()
+                );
+                return Ok(None);
+            }
+            eprintln!(
+                "Stale pidfile at {} (pid {} no longer alive), overwriting.",
+                path.display(),
+                old_pid
+            );
+        }
+    }
+
+    let our_pid = std::process::id();
+    std::fs::write(&path, our_pid.to_string())
+        .map_err(|e| format!("write pidfile {}: {}", path.display(), e))?;
+
+    Ok(Some(PidFileGuard { path: Some(path) }))
+}
+
 fn main() {
+    // B. Short-circuit for `--version` / `-V`. Tauri v2 has no built-in
+    // argv handling, so without this check a bare `frog-code --version`
+    // launches the full app (spawns sidecar + openclaw), which clashes
+    // with any already-running instance and was the real cause of the
+    // "auto-start doesn't work" symptom on headless Linux.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.iter().skip(1).any(|a| a == "--version" || a == "-V") {
+            println!("frog-code {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+    }
+
+    // C. Pidfile lock — fallback for when tauri-plugin-single-instance's
+    // dbus-based lock isn't available (common on SSH/headless Linux).
+    // The guard stays alive for the lifetime of main() and cleans up on
+    // normal exit.
+    let _pid_guard = match acquire_pidfile_lock() {
+        Ok(Some(g)) => Some(g),
+        Ok(None) => return, // another instance already live; bail out
+        Err(e) => {
+            eprintln!("warning: pidfile setup failed: {} (continuing)", e);
+            None
+        }
+    };
+
     // Initialize logger
     env_logger::init();
 

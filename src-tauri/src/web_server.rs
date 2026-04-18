@@ -927,6 +927,19 @@ pub async fn start(
     data_dir: PathBuf,
     openclaw_base: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Mirror the desktop main.rs behavior: if the user enabled
+    // `openclawAutoStart` in ~/.frogcode/platform-config.json, fire a
+    // `/openclaw/start` against the external sidecar. The sidecar itself
+    // is user-managed (systemd/pm2) in web mode so we only POST, not spawn.
+    if let Some(base) = openclaw_base.as_ref() {
+        if read_openclaw_auto_start_flag() {
+            let base = base.clone();
+            tokio::spawn(async move {
+                auto_start_openclaw(base).await;
+            });
+        }
+    }
+
     let state = WebAppState::new(data_dir, openclaw_base);
     let app = build_router(state);
 
@@ -938,6 +951,48 @@ pub async fn start(
     let listener = TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Read `openclawAutoStart` from `~/.frogcode/platform-config.json`.
+/// Returns false on any error so we never block startup on config issues.
+fn read_openclaw_auto_start_flag() -> bool {
+    let Some(home) = dirs::home_dir() else { return false };
+    let path = home.join(".frogcode").join("platform-config.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else { return false };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else { return false };
+    value
+        .get("openclawAutoStart")
+        .or_else(|| value.get("openclaw_auto_start"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// POST `{base}/openclaw/start` with retries. Sidecar may boot after
+/// frogcode-web when both are managed by the same systemd unit, so we
+/// retry for up to ~20s before giving up.
+async fn auto_start_openclaw(base: String) {
+    let url = format!("{}/openclaw/start", base.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    log::info!("OpenClaw auto-start: will POST {}", url);
+    println!("🔁 OpenClaw auto-start enabled — target {}", url);
+    for attempt in 1..=10u32 {
+        match client.post(&url).send().await {
+            Ok(r) if r.status().is_success() => {
+                log::info!("OpenClaw auto-start: OK on attempt {}", attempt);
+                println!("✅ OpenClaw gateway auto-started (attempt {})", attempt);
+                return;
+            }
+            Ok(r) => log::warn!(
+                "OpenClaw auto-start attempt {}: HTTP {}",
+                attempt,
+                r.status()
+            ),
+            Err(e) => log::warn!("OpenClaw auto-start attempt {}: {}", attempt, e),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    log::error!("OpenClaw auto-start: giving up after 10 attempts");
+    eprintln!("⚠️  OpenClaw auto-start failed after 10 retries");
 }
 
 // Suppress unused-warnings for items only used by the web binary.

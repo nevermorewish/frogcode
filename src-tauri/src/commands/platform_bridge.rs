@@ -756,6 +756,11 @@ pub async fn platform_start(
     }
     if let Some(mut child) = g.child.take() {
         let _ = child.kill().await;
+        // Reap so the child doesn't linger as a <defunct> zombie — tokio's
+        // Child::kill sends SIGKILL but doesn't waitpid; dropping the Child
+        // only reliably reaps when the tokio runtime reaper observes
+        // SIGCHLD, which can race with shutdown.
+        let _ = child.wait().await;
         info!("Killed previous Platform sidecar");
         append_lifecycle_log("kill", "killed previous sidecar before spawning new one");
     }
@@ -845,6 +850,7 @@ pub async fn platform_start(
         Ok(Ok(_)) => {}
         Ok(Err(e)) => {
             let _ = child.kill().await;
+            let _ = child.wait().await; // reap
             g.status = BridgeStatus::Error;
             g.error = Some(format!("read stdout: {}", e));
             append_lifecycle_log("error", &format!("read stdout failed: {}", e));
@@ -852,6 +858,7 @@ pub async fn platform_start(
         }
         Err(_) => {
             let _ = child.kill().await;
+            let _ = child.wait().await; // reap
             g.status = BridgeStatus::Error;
             g.error = Some("sidecar did not emit READY within 10s".to_string());
             append_lifecycle_log("error", "sidecar did not emit READY within 10s");
@@ -931,9 +938,11 @@ pub async fn platform_stop(
         .await;
     }
 
-    // Kill child
+    // Kill child + wait to reap (prevents <defunct> zombies piling up
+    // across restart cycles).
     if let Some(mut child) = g.child.take() {
         let _ = child.kill().await;
+        let _ = child.wait().await;
         info!("Platform sidecar process killed");
         append_lifecycle_log("kill", "sidecar process killed (graceful stop)");
     }

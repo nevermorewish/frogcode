@@ -719,8 +719,24 @@ export class OpenClawAgent implements Agent {
       logPath,
     };
     this.processManager = new OpenClawProcessManager(procConfig);
-    // ONE-SHOT start — no auto-restart. If the gateway dies, the user
-    // clicks Start again from the OpenClaw Sessions view.
+    // The process manager attempts bounded auto-restart on unexpected exits.
+    // When the restart budget is exhausted it fires 'terminal-exit' — at
+    // that point we must stop the WS client, otherwise it spins forever on
+    // ECONNREFUSED / unauthorized against whatever (if anything) now holds
+    // the port. This is the core fix for the token-mismatch reconnect loop.
+    this.processManager.on('terminal-exit', (code: number | null) => {
+      const fatal = this.processManager?.getFatalError() ?? null;
+      log(
+        'warn',
+        `gateway terminated permanently (code=${code})${fatal ? `: ${fatal}` : ''}`,
+      );
+      if (this.wsClient) {
+        this.wsClient.stop();
+        this.wsClient = null;
+      }
+      this.started = false;
+      this.lastError = fatal ?? `openclaw gateway exited (code=${code})`;
+    });
     this.processManager.start();
 
     // Start WS client — resolve gateway token from agent config or openclaw.json

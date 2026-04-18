@@ -36,6 +36,14 @@ export interface ProcessConfig {
 const MAX_LOG_LINES = 500;
 const NEXU_EVENT_MARKER = 'NEXU_EVENT ';
 
+// Bounded auto-restart budget. If the gateway dies unexpectedly, we attempt
+// up to MAX_RESTARTS_PER_WINDOW restarts within a rolling RESTART_WINDOW_MS;
+// exceeding the budget fires a 'terminal-exit' event so the agent can stop
+// the WS client and surface the error to the UI.
+const RESTART_WINDOW_MS = 120_000;
+const MAX_RESTARTS_PER_WINDOW = 3;
+const RESTART_DELAYS_MS = [2_000, 5_000, 10_000];
+
 function log(level: string, ...parts: any[]) {
   const msg = parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ');
   process.stderr.write(`[openclaw-proc ${level}] ${msg}\n`);
@@ -54,6 +62,11 @@ export class OpenClawProcessManager extends EventEmitter {
   private readonly logPath: string;
   /** Terminal error from the last spawn attempt. Cleared by start(). */
   private fatalError: string | null = null;
+  /** Set by stop(); suppresses auto-restart for voluntary shutdowns. */
+  private stopping = false;
+  /** Sliding-window restart timestamps — trimmed to RESTART_WINDOW_MS on each exit. */
+  private restartTimestamps: number[] = [];
+  private restartTimer: NodeJS.Timeout | null = null;
 
   constructor(config: ProcessConfig) {
     super();
@@ -117,16 +130,19 @@ export class OpenClawProcessManager extends EventEmitter {
   }
 
   /**
-   * Spawn the openclaw gateway. ONE-SHOT — no automatic restart on failure.
-   * If the process dies, it stays dead. The user can hit Start again from
-   * the OpenClaw Sessions view (which goes through ensureGateway and
-   * constructs a fresh ProcessManager).
+   * Spawn the openclaw gateway. On unexpected exit we auto-restart up to
+   * MAX_RESTARTS_PER_WINDOW times within a rolling RESTART_WINDOW_MS window,
+   * with backoff from RESTART_DELAYS_MS. Once the budget is exhausted we
+   * emit 'terminal-exit' and stay dead — the user can hit Start again from
+   * the OpenClaw Sessions view (fresh ProcessManager resets the budget).
+   * Voluntary shutdowns via stop() suppress auto-restart.
    */
   start(): void {
     if (this.child && !this.child.killed) return;
 
     // Clear any previous fatal state — fresh attempt.
     this.fatalError = null;
+    this.stopping = false;
 
     this.openLogStream();
 
@@ -213,13 +229,17 @@ export class OpenClawProcessManager extends EventEmitter {
       clearPidFile(this.config.stateDir);
 
       // Populate fatalError from stderr so the UI banner can surface the
-      // actual cause (port conflict, missing bin, etc). No auto-restart —
-      // one shot, stays dead.
+      // actual cause (port conflict, missing bin, etc).
       const hint = this.extractFailureHint();
       this.fatalError =
         hint ?? `openclaw gateway exited with code ${code} after ${uptime}ms`;
       this.writeLog('error', `stopped: ${this.fatalError}`);
       this.emit('exit', code);
+
+      // Auto-restart unless stop() was invoked. Budget-exhausted → terminal-exit.
+      if (!this.stopping) {
+        this.scheduleRestart(code);
+      }
     });
 
     child.on('error', (err) => {
@@ -231,6 +251,13 @@ export class OpenClawProcessManager extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    // Mark voluntary before any state inspection so a close event that
+    // races with stop() does not trigger scheduleRestart.
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (!this.child || this.child.killed) {
       this.logStream?.end();
       this.logStream = null;
@@ -277,6 +304,42 @@ export class OpenClawProcessManager extends EventEmitter {
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────
+
+  /**
+   * Schedule an auto-restart, or give up if the sliding-window budget is
+   * exhausted. Called from the child's 'close' handler whenever the exit
+   * was NOT triggered by stop(). On give-up emits 'terminal-exit' so the
+   * agent can tear down the WS client.
+   */
+  private scheduleRestart(exitCode: number | null): void {
+    const now = Date.now();
+    this.restartTimestamps = this.restartTimestamps.filter(
+      (t) => now - t < RESTART_WINDOW_MS,
+    );
+
+    if (this.restartTimestamps.length >= MAX_RESTARTS_PER_WINDOW) {
+      this.writeLog(
+        'error',
+        `giving up after ${MAX_RESTARTS_PER_WINDOW} restart attempts within ${RESTART_WINDOW_MS / 1000}s`,
+      );
+      this.emit('terminal-exit', exitCode);
+      return;
+    }
+
+    const attempt = this.restartTimestamps.length;
+    const delay = RESTART_DELAYS_MS[Math.min(attempt, RESTART_DELAYS_MS.length - 1)];
+    this.writeLog(
+      'info',
+      `restart scheduled in ${delay}ms (attempt ${attempt + 1}/${MAX_RESTARTS_PER_WINDOW})`,
+    );
+
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopping) return;
+      this.restartTimestamps.push(Date.now());
+      this.start();
+    }, delay);
+  }
 
   /**
    * Scan the recent log tail for well-known openclaw startup errors and

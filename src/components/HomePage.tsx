@@ -26,7 +26,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Toast, ToastContainer } from '@/components/ui/toast';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { useAuth, type EngineId } from '@/contexts/AuthContext';
+import { useAuth, type EngineId, matchTokenGroup, requiredGroupForEngine } from '@/contexts/AuthContext';
 import { useNavigation } from '@/contexts/NavigationContext';
 import { usePlatformStatus } from '@/hooks/usePlatformStatus';
 
@@ -490,13 +490,6 @@ const ENGINE_LABELS: Record<EngineId, string> = {
   openclaw: 'OpenClaw',
 };
 
-const PROVIDER_KEY_MAP: Record<string, EngineId> = {
-  'anthropic': 'claude',
-  'claude': 'claude',
-  'openai': 'codex',
-  'google': 'gemini',
-};
-
 // Priority order: openclaw first, claude code second, then others
 const ENGINE_ORDER: EngineId[] = ['openclaw', 'claude', 'codex', 'gemini'];
 
@@ -506,7 +499,7 @@ const FrogclawCard: React.FC<{
 }> = ({ onToast, step }) => {
   const { t } = useTranslation();
   const {
-    user, isAuthenticated, login, logout, tokens, systemProviders,
+    user, isAuthenticated, login, logout, tokens,
     engineTokens, selectEngineToken, openclawModels, feishuAppId,
     ensureGroupToken,
   } = useAuth();
@@ -564,18 +557,16 @@ const FrogclawCard: React.FC<{
     }
   };
 
-  // Compute which engines are available, sorted by ENGINE_ORDER (openclaw, claude first)
+  // Compute which engines are available, sorted by ENGINE_ORDER (openclaw, claude first).
+  // claude/codex/gemini are always shown so the user can always pick a token for them;
+  // openclaw only appears when the server returns an openclaw config.
   const availableEngines = useMemo(() => {
-    const present = new Set<EngineId>();
-    for (const sp of systemProviders) {
-      const engine = PROVIDER_KEY_MAP[sp.provider_key];
-      if (engine) present.add(engine);
-    }
+    const present = new Set<EngineId>(['claude', 'codex', 'gemini']);
     if (openclawModels.length > 0) {
       present.add('openclaw');
     }
     return ENGINE_ORDER.filter(e => present.has(e));
-  }, [systemProviders, openclawModels]);
+  }, [openclawModels]);
 
   const subtitleNode = (
     <span>
@@ -707,19 +698,9 @@ const FrogclawCard: React.FC<{
                         <SelectContent className="w-[--radix-select-trigger-width] min-w-[200px]">
                           {(() => {
                             const userGroup = user?.group || 'default';
-                            const requiredGroup =
-                              engine === 'openclaw' ? 'default'
-                                : (engine === 'claude' && claudeCodeMaxOnly) ? 'claude max'
-                                : null;
-                            const filterToken = (token: typeof tokens[0]) => {
-                              if (requiredGroup === 'default') {
-                                return token.group === 'default' || token.group === '';
-                              }
-                              if (requiredGroup === 'claude max') {
-                                return token.group === 'claude max';
-                              }
-                              return true;
-                            };
+                            const requiredGroup = requiredGroupForEngine(engine, claudeCodeMaxOnly);
+                            const filterToken = (token: typeof tokens[0]) =>
+                              requiredGroup ? matchTokenGroup(token.group, requiredGroup) : true;
                             const visibleTokens = tokens.filter(filterToken);
 
                             if (visibleTokens.length === 0 && requiredGroup) {

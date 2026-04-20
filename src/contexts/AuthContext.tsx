@@ -40,7 +40,7 @@ const AUTH_OPENCLAW_MODELS_KEY = 'frogclaw_openclaw_models';
 const AUTH_FEISHU_APPID_KEY = 'frogclaw_feishu_appid';
 const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
 const CLAUDE_MAX_GROUP = 'claude max';
-const OPENCLAW_GROUP = 'default';
+const DEFAULT_GROUP = 'default';
 const CLAUDE_MAX_ONLY_KEY = 'claude_code_max_only';
 
 function getClaudeMaxOnly(): boolean {
@@ -51,6 +51,27 @@ function getClaudeMaxOnly(): boolean {
   } catch {
     return true;
   }
+}
+
+/** Case- and whitespace-insensitive group comparison. An empty token group
+ *  is treated as "default". */
+export function normalizeGroup(g: string | undefined | null): string {
+  return (g || '').toLowerCase().replace(/\s+/g, '');
+}
+
+export function matchTokenGroup(tokenGroup: string | undefined | null, requiredGroup: string): boolean {
+  const tg = normalizeGroup(tokenGroup);
+  const rg = normalizeGroup(requiredGroup);
+  if (tg === rg) return true;
+  if (rg === 'default' && tg === '') return true;
+  return false;
+}
+
+/** Required token group per engine. Returns null when no filter applies. */
+export function requiredGroupForEngine(engine: EngineId, claudeMaxOnly: boolean): string | null {
+  if (engine === 'claude') return claudeMaxOnly ? CLAUDE_MAX_GROUP : null;
+  if (engine === 'openclaw' || engine === 'codex' || engine === 'gemini') return DEFAULT_GROUP;
+  return null;
 }
 
 function extractOpenclawInfo(cliProviders: FrogclawCliProvider[]): {
@@ -157,18 +178,16 @@ function autoSelectTokens(
     const hasProvider = systemProviders.some(sp => PROVIDER_KEY_MAP[sp.provider_key] === engine);
     if (!hasProvider) continue;
 
-    // Claude Code is hard-restricted to the claude max group when the toggle is on.
-    if (engine === 'claude' && claudeMaxOnly) {
-      const match = tokens.find(t => t.group === CLAUDE_MAX_GROUP);
-      if (match) {
-        result[engine] = match.id;
-      }
+    const required = requiredGroupForEngine(engine, claudeMaxOnly);
+    if (required) {
+      const match = tokens.find(t => matchTokenGroup(t.group, required));
+      if (match) result[engine] = match.id;
       continue;
     }
 
     const recommendedGroup = getRecommendedGroupFromProviders(engine, systemProviders);
     if (recommendedGroup) {
-      const match = tokens.find(t => t.group === recommendedGroup);
+      const match = tokens.find(t => matchTokenGroup(t.group, recommendedGroup));
       if (match) {
         result[engine] = match.id;
         continue;
@@ -177,13 +196,10 @@ function autoSelectTokens(
     result[engine] = tokens[0].id;
   }
 
-  // OpenClaw is locked to the default group.
   const hasOpenclaw = cliProviders.some(p => p.provider_type === 'openclaw');
   if (hasOpenclaw) {
-    const match = tokens.find(t => t.group === OPENCLAW_GROUP || t.group === '');
-    if (match) {
-      result.openclaw = match.id;
-    }
+    const match = tokens.find(t => matchTokenGroup(t.group, DEFAULT_GROUP));
+    if (match) result.openclaw = match.id;
   }
 
   return result;
@@ -199,14 +215,19 @@ function findMissingGroups(
   const claudeMaxOnly = getClaudeMaxOnly();
 
   const hasOpenclaw = cliProviders.some(p => p.provider_type === 'openclaw');
-  if (hasOpenclaw && !tokens.some(t => t.group === OPENCLAW_GROUP || t.group === '')) {
-    missing.add(OPENCLAW_GROUP);
+  const needsDefault = hasOpenclaw
+    || systemProviders.some(sp => {
+      const e = PROVIDER_KEY_MAP[sp.provider_key];
+      return e === 'codex' || e === 'gemini';
+    });
+  if (needsDefault && !tokens.some(t => matchTokenGroup(t.group, DEFAULT_GROUP))) {
+    missing.add(DEFAULT_GROUP);
   }
 
   const hasClaudeProvider = systemProviders.some(
     sp => PROVIDER_KEY_MAP[sp.provider_key] === 'claude',
   );
-  if (claudeMaxOnly && hasClaudeProvider && !tokens.some(t => t.group === CLAUDE_MAX_GROUP)) {
+  if (claudeMaxOnly && hasClaudeProvider && !tokens.some(t => matchTokenGroup(t.group, CLAUDE_MAX_GROUP))) {
     missing.add(CLAUDE_MAX_GROUP);
   }
 

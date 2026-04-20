@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -557,16 +557,9 @@ const FrogclawCard: React.FC<{
     }
   };
 
-  // Compute which engines are available, sorted by ENGINE_ORDER (openclaw, claude first).
-  // claude/codex/gemini are always shown so the user can always pick a token for them;
-  // openclaw only appears when the server returns an openclaw config.
-  const availableEngines = useMemo(() => {
-    const present = new Set<EngineId>(['claude', 'codex', 'gemini']);
-    if (openclawModels.length > 0) {
-      present.add('openclaw');
-    }
-    return ENGINE_ORDER.filter(e => present.has(e));
-  }, [openclawModels]);
+  // All four engines are always shown so the user can always pick a token for each;
+  // dropdowns still filter tokens by required group and auto-ensure missing groups.
+  const availableEngines = ENGINE_ORDER;
 
   const subtitleNode = (
     <span>

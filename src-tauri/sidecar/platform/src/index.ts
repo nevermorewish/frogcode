@@ -467,25 +467,64 @@ function buildNotificationCard(title: string, color: string, body: string): stri
   });
 }
 
-async function sendPrivateNotificationCard(client: lark.Client, userId: string, cardJson: string): Promise<void> {
+const KNOWN_USERS_DIR = path.join(
+  process.env.HOME || process.env.USERPROFILE || '',
+  '.frogcode',
+  'feishu-recent-users',
+);
+
+function knownUsersPath(appId: string): string {
+  return path.join(KNOWN_USERS_DIR, `${appId}.json`);
+}
+
+function loadKnownUsers(appId: string): Set<string> {
+  try {
+    const p = knownUsersPath(appId);
+    if (!fs.existsSync(p)) return new Set();
+    const parsed: unknown = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === 'string' && v.length > 0));
+  } catch (e: any) {
+    log('warn', `loadKnownUsers ${appId.slice(0, 12)}: ${e.message}`);
+    return new Set();
+  }
+}
+
+function saveKnownUsers(appId: string, users: Set<string>): void {
+  try {
+    fs.mkdirSync(KNOWN_USERS_DIR, { recursive: true });
+    const tmp = `${knownUsersPath(appId)}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify([...users]));
+    fs.renameSync(tmp, knownUsersPath(appId));
+  } catch (e: any) {
+    log('warn', `saveKnownUsers ${appId.slice(0, 12)}: ${e.message}`);
+  }
+}
+
+async function sendPrivateNotificationCard(client: lark.Client, userId: string, cardJson: string): Promise<boolean> {
   try {
     await client.im.v1.message.create({
       params: { receive_id_type: 'open_id' },
       data: { receive_id: userId, content: cardJson, msg_type: 'interactive' },
     });
+    return true;
   } catch (err: any) {
     log('warn', `sendPrivateNotificationCard open_id=${userId.slice(0, 12)}: ${err.message?.slice(0, 120)}`);
+    return false;
   }
 }
 
-async function notifyKnownPrivateUsers(client: lark.Client, userIds: Iterable<string>, cardJson: string): Promise<number> {
-  let sent = 0;
-  for (const userId of userIds) {
-    if (!userId) continue;
-    await sendPrivateNotificationCard(client, userId, cardJson);
-    sent++;
-  }
-  return sent;
+async function notifyKnownPrivateUsers(
+  client: lark.Client,
+  userIds: Iterable<string>,
+  cardJson: string,
+): Promise<number> {
+  const ids = [...new Set([...userIds].filter((u) => typeof u === 'string' && u.length > 0))];
+  if (ids.length === 0) return 0;
+  const results = await Promise.all(
+    ids.map((uid) => sendPrivateNotificationCard(client, uid, cardJson)),
+  );
+  return results.reduce((n, ok) => n + (ok ? 1 : 0), 0);
 }
 
 // ============================================================================
@@ -602,7 +641,10 @@ function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
 
         // Track recent private-chat users for proactive notification cards
         if (chatType === 'p2p') {
-          bot.recentPrivateUsers.add(userId);
+          if (!bot.recentPrivateUsers.has(userId)) {
+            bot.recentPrivateUsers.add(userId);
+            saveKnownUsers(bot.appId, bot.recentPrivateUsers);
+          }
         }
 
         // ─── Unassigned bot: reply with "未分配" message ─────────────
@@ -756,7 +798,7 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
     cardRenderer,
     status: 'starting',
     error: null,
-    recentPrivateUsers: new Set(),
+    recentPrivateUsers: loadKnownUsers(appId),
   };
 
   // Fetch bot's own open_id for group-chat @mention matching
@@ -803,8 +845,9 @@ async function connectBot(channel: IMChannelConfig): Promise<BotConnection> {
         body,
       );
       // Startup notifications are sent only to users who have messaged this bot before.
+      const total = bot.recentPrivateUsers.size;
       const sent = await notifyKnownPrivateUsers(larkClient, bot.recentPrivateUsers, card);
-      log('info', `[${appId.slice(0, 12)}] startup notification sent to ${sent} known users`);
+      log('info', `[${appId.slice(0, 12)}] startup notification delivered ${sent}/${total} known users`);
     }
   } catch (err: any) {
     bot.status = 'error';
@@ -931,8 +974,9 @@ async function _reconcileBotsInner(): Promise<void> {
           'red',
           `该机器人已断开 **${oldLabel}** 后端连接。\n\n如需继续使用，请在 Frog Code 应用中重新分配 CLI 后端。`,
         );
+        const total = existing.recentPrivateUsers.size;
         const sent = await notifyKnownPrivateUsers(existing.larkClient, existing.recentPrivateUsers, card);
-        log('info', `[${ch.appId.slice(0, 12)}] farewell notification sent to ${sent} known users`);
+        log('info', `[${ch.appId.slice(0, 12)}] farewell notification delivered ${sent}/${total} known users`);
         // Detach agentManager but keep bot connected (so it can reply "未分配")
         if (existing.agentManager) {
           try { await existing.agentManager.detach(); } catch {}
@@ -970,8 +1014,9 @@ async function _reconcileBotsInner(): Promise<void> {
           'green',
           `该机器人已成功连接 **${agentLabel}** 后端。\n\n现在可以直接发送消息开始 AI 对话。`,
         );
+        const total = existing.recentPrivateUsers.size;
         const sent = await notifyKnownPrivateUsers(existing.larkClient, existing.recentPrivateUsers, card);
-        log('info', `[${ch.appId.slice(0, 12)}] success notification sent to ${sent} known users`);
+        log('info', `[${ch.appId.slice(0, 12)}] success notification delivered ${sent}/${total} known users`);
 
         log('info', `[${ch.appId.slice(0, 12)}] now assigned to ${newAssignment}`);
         emitStatus();

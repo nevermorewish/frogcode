@@ -153,6 +153,8 @@ interface ChatCardState {
   cardState: CardState;
   feishuMessageId: string | null;
   lastFlush: number;
+  /** Wall-clock time of last AgentEvent received OR card begin. Used to detect orphaned cards. */
+  lastActivityAt: number;
   flushTimer: ReturnType<typeof setTimeout> | null;
   /** Feishu message_id of the user's message (for reply-in-thread). */
   replyToMessageId?: string;
@@ -165,6 +167,12 @@ interface ChatCardState {
 }
 
 const THROTTLE_MS = 300;
+/**
+ * 卡片在 running/thinking 状态下没有任何事件超过这个时间就视作孤儿——
+ * 之前某次 agent 异常死亡没清理状态，新消息进来 begin() 会被永远挡住。
+ * 值需要比 claude 自身的 IDLE_TIMEOUT_MS (180s) 稍大，避免正常长任务被误判。
+ */
+const ORPHAN_CARD_MS = 240_000;
 
 export class CardRenderer {
   private deps: CardRendererDeps;
@@ -195,10 +203,16 @@ export class CardRenderer {
    */
   begin(chatId: string, replyToMessageId?: string, userId?: string): boolean {
     const existing = this.chats.get(chatId);
-    // Guard: if there's already an active card (not finalized), skip
+    // Guard: if there's already an active card (not finalized), skip...
+    // ...UNLESS the card has been dormant long enough to be considered an orphan
+    // left behind by a crashed agent session (no 'result' event ever arrived).
     if (existing && existing.cardState.status !== 'complete' && existing.cardState.status !== 'error') {
-      log('warn', `begin: chatId=${chatId.slice(0, 12)} already has active card (${existing.cardState.status}), skipping`);
-      return false;
+      const idleMs = Date.now() - (existing.lastActivityAt || 0);
+      if (idleMs < ORPHAN_CARD_MS) {
+        log('warn', `begin: chatId=${chatId.slice(0, 12)} already has active card (${existing.cardState.status}, idle ${Math.round(idleMs / 1000)}s), skipping`);
+        return false;
+      }
+      log('warn', `begin: chatId=${chatId.slice(0, 12)} orphan card (${existing.cardState.status}, idle ${Math.round(idleMs / 1000)}s) detected, resetting`);
     }
     // Clean up any existing flush timer
     if (existing?.flushTimer) clearTimeout(existing.flushTimer);
@@ -207,6 +221,7 @@ export class CardRenderer {
       cardState: freshState(),
       feishuMessageId: null,
       lastFlush: 0,
+      lastActivityAt: Date.now(),
       flushTimer: null,
       replyToMessageId,
       userId,
@@ -221,6 +236,7 @@ export class CardRenderer {
   async processEvent(chatId: string, evt: AgentEvent): Promise<void> {
     const chat = this.chats.get(chatId);
     if (!chat) return;
+    chat.lastActivityAt = Date.now();
     const { cardState } = chat;
 
     switch (evt.type) {

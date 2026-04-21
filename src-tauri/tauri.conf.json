@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Frog Code",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "identifier": "claude.workbench.app",
   "build": {
     "beforeDevCommand": "npm run dev",

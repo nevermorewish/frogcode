@@ -763,7 +763,7 @@ pub async fn reinstall_plugin(plugin_source: String) -> Result<String, String> {
 
     // Determine the claude binary name based on platform
     let claude_cmd = if cfg!(target_os = "windows") {
-        "claude.exe"
+        "claude.cmd"
     } else {
         "claude"
     };

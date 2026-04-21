@@ -656,7 +656,7 @@ const FrogclawCard: React.FC<{
                 {t('home.frogclaw.tokenConfig', '令牌配置')}
               </label>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                {t('home.frogclaw.tokenConfigTip', '建议 Claude Code 使用 claude max 分组，OpenClaw 使用 default 分组')}
+                {t('home.frogclaw.tokenConfigTip', '建议 Claude Code 使用 Claude Max 分组，OpenClaw 使用 default 分组')}
               </p>
             </div>
             {tokens.length > 0 && availableEngines.length > 0 ? (

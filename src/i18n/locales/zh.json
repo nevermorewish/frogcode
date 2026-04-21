@@ -588,7 +588,7 @@
     "promptSuggestion": "智能输入建议",
     "promptSuggestionDescription": "基于对话上下文自动生成输入建议，按 Tab 接受",
     "claudeCodeMaxOnly": "Claude Code 只使用 Claude Max 令牌",
-    "claudeCodeMaxOnlyDescription": "勾选后，令牌配置中 Claude Code 仅显示 claude max 分组的令牌；若该分组下无令牌，将自动新建一个",
+    "claudeCodeMaxOnlyDescription": "勾选后，令牌配置中 Claude Code 仅显示 Claude Max 分组的令牌；若该分组下无令牌，将自动新建一个",
     "disableRewindGitOps": "禁用撤回中的 Git 操作",
     "disableRewindGitOpsDescription": "启用后，撤回功能只能删除对话历史，无法回滚代码变更（适用于多人协作或生产环境）",
     "chatRetentionDays": "聊天记录保留天数",

@@ -588,7 +588,7 @@
     "promptSuggestion": "Prompt Suggestions",
     "promptSuggestionDescription": "Auto-generate input suggestions based on conversation context, press Tab to accept",
     "claudeCodeMaxOnly": "Only use Claude Max tokens for Claude Code",
-    "claudeCodeMaxOnlyDescription": "When enabled, the Claude Code dropdown only shows tokens from the 'claude max' group; an empty group is auto-created on demand",
+    "claudeCodeMaxOnlyDescription": "When enabled, the Claude Code dropdown only shows tokens from the 'Claude Max' group; an empty group is auto-created on demand",
     "disableRewindGitOps": "Disable Git Operations in Rewind",
     "disableRewindGitOpsDescription": "When enabled, rewind can only delete conversation history, cannot rollback code changes (suitable for collaboration or production)",
     "chatRetentionDays": "Chat Retention Days",

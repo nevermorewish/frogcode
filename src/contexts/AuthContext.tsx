@@ -39,7 +39,7 @@ const AUTH_ENGINE_TOKENS_KEY = 'frogclaw_engine_tokens';
 const AUTH_OPENCLAW_MODELS_KEY = 'frogclaw_openclaw_models';
 const AUTH_FEISHU_APPID_KEY = 'frogclaw_feishu_appid';
 const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
-const CLAUDE_MAX_GROUP = 'claude max';
+const CLAUDE_MAX_GROUP = 'Claude Max';
 const DEFAULT_GROUP = 'default';
 const CLAUDE_MAX_ONLY_KEY = 'claude_code_max_only';
 

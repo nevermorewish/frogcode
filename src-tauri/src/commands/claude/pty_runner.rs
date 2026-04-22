@@ -137,8 +137,13 @@ pub async fn execute_claude_pty(
         .map_err(|e| format!("spawn_command: {}", e))?;
     let pid = child.process_id().unwrap_or(0);
 
-    // Slave side no longer needed in this process.
-    drop(pair.slave);
+    // ⚠️ Do NOT `drop(pair.slave)` here. portable-pty's SlavePty/MasterPty
+    // share an `Arc<Inner>`; releasing the slave reference too early on
+    // Windows races libuv inside Node (Claude CLI is a Node process), which
+    // panics with `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`
+    // (libuv `src/win/async.c:76`). Keep the slave alive until after
+    // `child.wait()` returns. See openai/codex#14679 for the same root cause.
+    let slave_keepalive = pair.slave;
 
     let reader = pair
         .master
@@ -227,6 +232,9 @@ pub async fn execute_claude_pty(
     }
 
     // Wait task: emit completion + clean up registry on exit.
+    // `slave_keepalive` is moved in so the SlavePty Arc reference outlives
+    // child.wait(); only after the child has fully exited do we let it drop,
+    // avoiding the libuv UV_HANDLE_CLOSING assertion inside Node.
     let sid_for_wait = session_id.clone();
     let app_for_wait = app.clone();
     let registry_arc = registry.0.clone();
@@ -253,6 +261,11 @@ pub async fn execute_claude_pty(
                 "mode": "pty",
             }),
         );
+        // Drop order matters on Windows: child is already dead, now release
+        // the slave (its half of ConPTY) BEFORE the master gets dropped via
+        // `unregister_pty`. Explicit drop ensures the order even if rustc
+        // would otherwise reorder.
+        drop(slave_keepalive);
         let _ = registry_arc.unregister_pty(&sid_for_wait);
     });
 

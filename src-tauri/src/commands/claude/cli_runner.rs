@@ -207,6 +207,22 @@ fn create_command_with_env(program: &str) -> Command {
         }
     }
 
+    // Pre-empt Claude CLI features that trigger interactive menus or known
+    // libuv/ConPTY crashes on Windows. Set unconditionally — these are all
+    // CLI features that frogcode itself supplies a UI for.
+    //   - DISABLE_AUTOUPDATER: stops the version-check prompt at startup.
+    //   - DISABLE_TELEMETRY / DISABLE_BUG_COMMAND / DISABLE_ERROR_REPORTING:
+    //     stop the periodic telemetry pings whose libuv pipe close races
+    //     trigger anthropics/claude-code#7579 on Windows.
+    //   - CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: stops the IDE-extension auto-
+    //     install path which spawns child Node processes whose ConPTY
+    //     teardown also panics with the UV_HANDLE_CLOSING assertion.
+    tokio_cmd.env("DISABLE_AUTOUPDATER", "1");
+    tokio_cmd.env("DISABLE_TELEMETRY", "1");
+    tokio_cmd.env("DISABLE_BUG_COMMAND", "1");
+    tokio_cmd.env("DISABLE_ERROR_REPORTING", "1");
+    tokio_cmd.env("CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "1");
+
     // Add NVM support if the program is in an NVM directory (cross-platform)
     if program.contains("/.nvm/versions/node/") || program.contains("\\.nvm\\versions\\node\\") {
         if let Some(node_bin_dir) = std::path::Path::new(program).parent() {

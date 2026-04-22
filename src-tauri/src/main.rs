@@ -21,12 +21,14 @@ use commands::default_skills::{install_default_skills, install_openclaw_defaults
 use commands::home::{check_tools_installed, install_tool};
 use commands::openclaw_history::{scan_openclaw_history_sessions, load_openclaw_history_session};
 use commands::platform_bridge::{
+    install_read_log, openclaw_read_log,
     platform_connect_feishu, platform_get_agent_config, platform_get_config,
     platform_get_openclaw_session, platform_get_openclaw_status, platform_list_openclaw_sessions,
     platform_openclaw_restart, platform_openclaw_start, platform_openclaw_stop,
     platform_read_log, platform_reload_config, platform_save_agent_config, platform_save_config,
     platform_start, platform_status, platform_stop, platform_write_log,
     platform_wechat_qr_cancel, platform_wechat_qr_start, platform_wechat_qr_wait,
+    session_mgmt_read_log, session_mgmt_write_log,
     get_im_channels, save_im_channels,
     PlatformBridgeState,
 };
@@ -37,7 +39,8 @@ use commands::acemcp::{
 use commands::claude::{
     cancel_claude_execution, check_claude_version, clear_custom_claude_path, continue_claude_code,
     delete_project, delete_project_permanently, delete_session, delete_sessions_batch,
-    ensure_onboarding_complete, execute_claude_code, find_claude_md_files, get_available_tools, get_claude_execution_config,
+    ensure_onboarding_complete, execute_claude_code, execute_claude_pty, find_claude_md_files, get_available_tools, get_claude_execution_config,
+    pty_resize, pty_send_input,
     get_claude_path, get_claude_permission_config, get_claude_session_output, get_claude_settings,
     get_codex_system_prompt, get_hooks_config, get_permission_presets, get_project_sessions,
     get_system_prompt, list_directory_contents, list_hidden_projects, list_projects,
@@ -595,6 +598,9 @@ fn main() {
             cancel_claude_execution,
             list_running_claude_sessions,
             get_claude_session_output,
+            execute_claude_pty,
+            pty_send_input,
+            pty_resize,
             list_directory_contents,
             search_files,
             get_hooks_config,
@@ -853,6 +859,10 @@ fn main() {
             platform_reload_config,
             platform_read_log,
             platform_write_log,
+            openclaw_read_log,
+            install_read_log,
+            session_mgmt_read_log,
+            session_mgmt_write_log,
             platform_get_openclaw_status,
             platform_openclaw_start,
             platform_openclaw_stop,

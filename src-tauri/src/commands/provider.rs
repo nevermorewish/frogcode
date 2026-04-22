@@ -390,7 +390,9 @@ pub async fn switch_provider_config(
     }
 
     // apiKeyHelper 根据用户勾选状态决定是否自动生成
-    if config.enable_auto_api_key_helper.unwrap_or(false) {
+    // 默认 true：避免 Claude CLI 启动时弹"Detected a custom API key"
+    // 交互菜单导致会话卡死。用户显式设 false 才会跳过自动生成。
+    if config.enable_auto_api_key_helper.unwrap_or(true) {
         if let Some(token) = auth_token {
             let helper_command = format!("echo '{}'", token);
             settings_obj.insert(
@@ -485,6 +487,62 @@ pub async fn clear_provider_config(_app: AppHandle) -> Result<String, String> {
     log::info!("代理商配置清理完成");
 
     Ok("✅ 已清理所有ANTHROPIC环境变量和apiKeyHelper配置\n\n配置已从 ~/.claude/settings.json 中移除！".to_string())
+}
+
+/// Spawn-time defensive fix for the "Detected a custom API key in your
+/// environment" interactive prompt. If `~/.claude/settings.json` has
+/// ANTHROPIC_API_KEY/AUTH_TOKEN in env but no `apiKeyHelper`, Claude CLI
+/// blocks the session waiting for keystroke input — the frogcode subprocess
+/// has no way to answer and the UI looks frozen. This injects an
+/// `apiKeyHelper` so the CLI uses the key non-interactively.
+///
+/// Returns Ok(true) if it modified the file. Best-effort: failures are
+/// logged but do not block spawn.
+pub fn ensure_api_key_helper_for_spawn() -> Result<bool, String> {
+    let mut settings = load_settings()?;
+    let settings_obj = settings
+        .as_object_mut()
+        .ok_or_else(|| "settings.json 顶层不是对象".to_string())?;
+
+    // Already set — nothing to do.
+    let helper_already_set = settings_obj
+        .get("apiKeyHelper")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if helper_already_set {
+        return Ok(false);
+    }
+
+    // Find a token to wrap. Prefer AUTH_TOKEN, fall back to API_KEY.
+    let env_obj = match settings_obj.get("env").and_then(|v| v.as_object()) {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+    let token = env_obj
+        .get("ANTHROPIC_AUTH_TOKEN")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            env_obj
+                .get("ANTHROPIC_API_KEY")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        });
+    let Some(token) = token else {
+        return Ok(false);
+    };
+    let token = token.to_string();
+
+    // Match the existing format used in `apply_provider_config`.
+    let helper_command = format!("echo '{}'", token);
+    settings_obj.insert(
+        "apiKeyHelper".to_string(),
+        Value::String(helper_command),
+    );
+    save_settings(&settings)?;
+    log::info!("ensure_api_key_helper_for_spawn: 注入 apiKeyHelper 以避免 Claude CLI 卡在交互菜单");
+    Ok(true)
 }
 
 // 测试代理商连接

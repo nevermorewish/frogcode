@@ -34,10 +34,22 @@ pub struct ProcessHandle {
     pub job_object: Option<Arc<JobObject>>, // Job object for automatic cleanup on Windows
 }
 
+/// Per-session PTY state for the dual-channel (PTY + stream-json) executor.
+/// Stored separately from `ProcessHandle` because portable-pty's master/writer
+/// types don't fit in `Arc<Mutex<Option<tokio::process::Child>>>`. Killing the
+/// underlying process still goes through the normal PID-based kill path —
+/// the registry's `processes` map already tracks the PID via
+/// `register_claude_session_with_job`.
+pub struct PtyHandle {
+    pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
+    pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+}
+
 /// Registry for tracking active agent processes
 pub struct ProcessRegistry {
     processes: Arc<Mutex<HashMap<i64, ProcessHandle>>>, // run_id -> ProcessHandle
-    next_id: Arc<Mutex<i64>>, // Auto-incrementing ID for non-agent processes
+    next_id: Arc<Mutex<i64>>,                           // Auto-incrementing ID for non-agent processes
+    pty_handles: Arc<Mutex<HashMap<String, PtyHandle>>>, // session_id -> PtyHandle
 }
 
 impl ProcessRegistry {
@@ -45,7 +57,67 @@ impl ProcessRegistry {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(Mutex::new(1000000)), // Start at high number to avoid conflicts
+            pty_handles: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Register a PTY-mode session. Caller must also have called
+    /// `register_claude_session_with_job` to track the underlying PID for
+    /// kill/list operations.
+    pub fn register_pty(
+        &self,
+        session_id: String,
+        writer: Box<dyn std::io::Write + Send>,
+        master: Box<dyn portable_pty::MasterPty + Send>,
+    ) -> Result<(), String> {
+        let mut handles = self.pty_handles.lock().map_err(|e| e.to_string())?;
+        handles.insert(
+            session_id,
+            PtyHandle {
+                writer: Arc::new(Mutex::new(writer)),
+                master: Arc::new(Mutex::new(master)),
+            },
+        );
+        Ok(())
+    }
+
+    /// Drop a PTY handle (called on session exit).
+    pub fn unregister_pty(&self, session_id: &str) -> Result<(), String> {
+        let mut handles = self.pty_handles.lock().map_err(|e| e.to_string())?;
+        handles.remove(session_id);
+        Ok(())
+    }
+
+    /// Forward bytes from the frontend xterm to the PTY's stdin.
+    pub fn write_pty_input(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+        let handles = self.pty_handles.lock().map_err(|e| e.to_string())?;
+        let handle = handles
+            .get(session_id)
+            .ok_or_else(|| format!("PTY session not found: {}", session_id))?;
+        let mut writer = handle.writer.lock().map_err(|e| e.to_string())?;
+        use std::io::Write;
+        writer
+            .write_all(data)
+            .map_err(|e| format!("write_pty_input: {}", e))?;
+        writer.flush().map_err(|e| format!("flush: {}", e))?;
+        Ok(())
+    }
+
+    /// Resize the PTY (when xterm resizes in the UI).
+    pub fn resize_pty(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
+        let handles = self.pty_handles.lock().map_err(|e| e.to_string())?;
+        let handle = handles
+            .get(session_id)
+            .ok_or_else(|| format!("PTY session not found: {}", session_id))?;
+        let master = handle.master.lock().map_err(|e| e.to_string())?;
+        master
+            .resize(portable_pty::PtySize {
+                cols,
+                rows,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("resize: {}", e))
     }
 
     /// Generate a unique ID for non-agent processes

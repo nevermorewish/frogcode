@@ -47,6 +47,7 @@ export const RunningClaudeSessions: React.FC<RunningClaudeSessionsProps> = ({
         });
       } catch (err) {
         console.error('[RunningClaudeSessions] Failed to setup event listener:', err);
+        api.platform.writeSessionMgmtLog('error', 'cli', `setupEventListener: ${String(err)}`).catch(() => {});
       }
     };
 
@@ -75,6 +76,7 @@ export const RunningClaudeSessions: React.FC<RunningClaudeSessionsProps> = ({
       setError(null);
     } catch (err) {
       console.error("Failed to load running sessions:", err);
+      api.platform.writeSessionMgmtLog('error', 'cli', `listRunningClaudeSessions: ${String(err)}`).catch(() => {});
       setError("Failed to load running sessions");
     } finally {
       setLoading(false);

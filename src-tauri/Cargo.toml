@@ -66,6 +66,7 @@ walkdir = "2"
 serde_yaml = "0.9"
 once_cell = "1.19"
 urlencoding = "2.1"
+portable-pty = "0.8"
 
 # Web server mode (frogcode-web binary)
 axum = { version = "0.8", features = ["ws"] }

@@ -97,19 +97,32 @@ export const LogsView: React.FC = () => {
   const autoScrollRef = useRef(true);
 
   // ─── Log sources ─────────────────────────────────────────────────────
+  const adapt = (r: { path?: string; exists?: boolean; totalLines?: number; lines?: string[] }) => ({
+    path: r.path ?? '',
+    exists: r.exists ?? false,
+    totalLines: r.totalLines ?? 0,
+    lines: (r.lines ?? []) as string[],
+  });
   const sources: LogSource[] = [
     {
       id: 'sidecar',
       label: 'Platform Sidecar',
-      fetchLines: async () => {
-        const r = await api.platform.readLog(500);
-        return {
-          path: r.path ?? '',
-          exists: r.exists ?? false,
-          totalLines: r.totalLines ?? 0,
-          lines: (r.lines ?? []) as string[],
-        };
-      },
+      fetchLines: async () => adapt(await api.platform.readLog(500)),
+    },
+    {
+      id: 'openclaw',
+      label: 'OpenClaw',
+      fetchLines: async () => adapt(await api.platform.readOpenclawLog(500)),
+    },
+    {
+      id: 'sessionMgmt',
+      label: '会话管理',
+      fetchLines: async () => adapt(await api.platform.readSessionMgmtLog(500)),
+    },
+    {
+      id: 'install',
+      label: 'Install',
+      fetchLines: async () => adapt(await api.platform.readInstallLog(500)),
     },
   ];
 

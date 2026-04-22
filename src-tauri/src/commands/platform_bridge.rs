@@ -956,16 +956,9 @@ pub async fn platform_stop(
     Ok(())
 }
 
-/// Read the last N lines (default 200) from the sidecar stderr log.
-/// Useful for diagnosing "bot didn't respond" issues — every received
-/// Feishu event is logged there, so the user can tell the difference
-/// between "event not received" (empty log) and "event filtered out"
-/// (log shows the event but an early-return hit).
-#[tauri::command]
-pub async fn platform_read_log(
-    lines: Option<usize>,
-) -> Result<serde_json::Value, String> {
-    let path = config_dir()?.join("platform-sidecar.log");
+/// Read the last N lines (default 200) from a log file at `path`. Returns
+/// a JSON object with `path`, `exists`, optional `totalLines`, and `lines`.
+fn read_tailed(path: PathBuf, lines: Option<usize>) -> Result<serde_json::Value, String> {
     if !path.exists() {
         return Ok(serde_json::json!({
             "path": path.to_string_lossy(),
@@ -987,6 +980,73 @@ pub async fn platform_read_log(
         "totalLines": all.len(),
         "lines": tail,
     }))
+}
+
+/// Read the last N lines (default 200) from the sidecar stderr log.
+/// Useful for diagnosing "bot didn't respond" issues — every received
+/// Feishu event is logged there, so the user can tell the difference
+/// between "event not received" (empty log) and "event filtered out"
+/// (log shows the event but an early-return hit).
+#[tauri::command]
+pub async fn platform_read_log(
+    lines: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    read_tailed(config_dir()?.join("platform-sidecar.log"), lines)
+}
+
+#[tauri::command]
+pub async fn openclaw_read_log(
+    lines: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    read_tailed(
+        config_dir()?
+            .join("openclaw")
+            .join("config")
+            .join("openclaw.log"),
+        lines,
+    )
+}
+
+#[tauri::command]
+pub async fn install_read_log(
+    lines: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    read_tailed(config_dir()?.join("install.log"), lines)
+}
+
+#[tauri::command]
+pub async fn session_mgmt_read_log(
+    lines: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    read_tailed(config_dir()?.join("session-management.log"), lines)
+}
+
+/// Append a line to the session-management log. Format:
+///   [2026-04-22T10:15:32.123] [ui error:tab] listRunningSessions timed out
+/// `source` is "ui" or "rust"; `level` is "info" / "warn" / "error";
+/// `category` is a short tag like "tab" / "session" / "cli" / "storage".
+pub fn append_session_log(source: &str, level: &str, category: &str, detail: &str) {
+    let Ok(dir) = config_dir() else { return };
+    let path = dir.join("session-management.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+        let _ = writeln!(f, "[{}] [{} {}:{}] {}", ts, source, level, category, detail);
+    }
+}
+
+#[tauri::command]
+pub async fn session_mgmt_write_log(
+    level: String,
+    category: String,
+    message: String,
+) -> Result<(), String> {
+    append_session_log("ui", &level, &category, &message);
+    Ok(())
 }
 
 #[tauri::command]

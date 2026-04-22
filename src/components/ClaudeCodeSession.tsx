@@ -37,6 +37,7 @@ import { codexConverter } from '@/lib/codexConverter';
 import { convertGeminiSessionDetailToClaudeMessages } from '@/lib/geminiConverter';
 import { SessionHeader } from "./session/SessionHeader";
 import { SessionMessages, type SessionMessagesRef } from "./session/SessionMessages";
+import { PtyTerminalPanel } from "./PtyTerminalPanel";
 
 import * as SessionHelpers from '@/lib/sessionHelpers';
 
@@ -98,6 +99,15 @@ const ClaudeCodeSessionInner: React.FC<ClaudeCodeSessionProps> = ({
   const { t } = useTranslation();
   const [projectPath, setProjectPath] = useState(initialProjectPath || session?.project_path || "");
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
+
+  // PTY channel state: when set, the session view swaps to an xterm panel
+  // that talks directly to a PTY-spawned Claude. Triggered automatically by
+  // blacklisted slash commands (/login etc.) or manually via a UI toggle.
+  const [ptySessionId, setPtySessionId] = useState<string | null>(null);
+  const PTY_COMMAND_BLACKLIST = useMemo(
+    () => new Set(['/login', '/logout', '/init', '/setup-token']),
+    [],
+  );
   const {
     messages,
     setMessages,
@@ -459,6 +469,20 @@ const ClaudeCodeSessionInner: React.FC<ClaudeCodeSessionProps> = ({
   // 解决问题：当用户滚动查看历史消息后发送新消息，页面不会自动滚动到底部
   // 🔧 修复：消息数量过多时使用虚拟列表的 scrollToIndex 确保滚动到真正的底部
   const handleSendPromptWithScroll = useCallback((prompt: string, model: ModelType, maxThinkingTokens?: number) => {
+    // Blacklist: commands that require a real TTY (Ink raw mode). Route them
+    // to the PTY channel instead of stream-json to avoid hanging on the
+    // interactive menu.
+    const firstToken = prompt.trim().split(/\s+/)[0];
+    if (projectPath && PTY_COMMAND_BLACKLIST.has(firstToken)) {
+      api.pty
+        .execute(projectPath, prompt, String(model))
+        .then((sid) => setPtySessionId(sid))
+        .catch((err) => {
+          console.error('[ClaudeCodeSession] PTY execute failed:', err);
+        });
+      return;
+    }
+
     // 重置滚动状态，确保发送消息后自动滚动到底部
     setUserScrolled(false);
     setShouldAutoScroll(true);
@@ -470,7 +494,7 @@ const ClaudeCodeSessionInner: React.FC<ClaudeCodeSessionProps> = ({
     }, 50);
 
     handleSendPrompt(prompt, model, maxThinkingTokens);
-  }, [handleSendPrompt, setUserScrolled, setShouldAutoScroll]);
+  }, [handleSendPrompt, setUserScrolled, setShouldAutoScroll, projectPath, PTY_COMMAND_BLACKLIST]);
 
   // 🆕 方案 B-1: 设置发送提示词回调，用于计划批准后自动执行
   useEffect(() => {
@@ -965,14 +989,35 @@ const ClaudeCodeSessionInner: React.FC<ClaudeCodeSessionProps> = ({
       onRevert={handleRevert}
       getPromptIndexForMessage={getPromptIndexForMessage}
     >
-      <SessionMessages
-        ref={sessionMessagesRef}
-        messageGroups={messageGroups}
-        isLoading={isLoading}
-        error={error}
-        parentRef={parentRef}
-        onCancel={handleCancelExecution}
-      />
+      {ptySessionId ? (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '6px 12px', fontSize: 12, color: '#8899aa', borderBottom: '1px solid #2a2e36' }}>
+            终端模式 — 会话 {ptySessionId}
+            <button
+              onClick={() => {
+                api.cancelClaudeExecution(ptySessionId).catch(() => {});
+                setPtySessionId(null);
+              }}
+              style={{ marginLeft: 12, color: '#f87171', background: 'transparent', border: '1px solid #f87171', padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
+            >
+              关闭
+            </button>
+          </div>
+          <PtyTerminalPanel
+            sessionId={ptySessionId}
+            onExit={() => setPtySessionId(null)}
+          />
+        </div>
+      ) : (
+        <SessionMessages
+          ref={sessionMessagesRef}
+          messageGroups={messageGroups}
+          isLoading={isLoading}
+          error={error}
+          parentRef={parentRef}
+          onCancel={handleCancelExecution}
+        />
+      )}
     </SessionProvider>
   );
 

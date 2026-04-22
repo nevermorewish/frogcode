@@ -16,7 +16,7 @@ import { usePluginSlashCommands } from "./hooks/usePluginSlashCommands";
 import { api } from "@/lib/api";
 import { getEnabledProviders } from "@/lib/promptEnhancementService";
 import { inputReducer, initialState } from "./reducer";
-import { getDefaultModel } from "./defaultModelStorage";
+import { getDefaultModel, setDefaultModel } from "./defaultModelStorage";
 
 // Import sub-components
 import { InputArea } from "./InputArea";
@@ -35,7 +35,7 @@ const FloatingPromptInputInner = (
     onSend,
     isLoading = false,
     disabled = false,
-    defaultModel = "sonnet",
+    defaultModel = "opus47",
     sessionModel,
     projectPath,
     sessionId,
@@ -620,7 +620,10 @@ const FloatingPromptInputInner = (
             executionEngineConfig={state.executionEngineConfig}
             setExecutionEngineConfig={(config) => dispatch({ type: "SET_EXECUTION_ENGINE_CONFIG", payload: config })}
             selectedModel={state.selectedModel}
-            setSelectedModel={(model) => dispatch({ type: "SET_MODEL", payload: model })}
+            setSelectedModel={(model) => {
+              dispatch({ type: "SET_MODEL", payload: model });
+              setDefaultModel(model);
+            }}
             availableModels={availableModels}
             selectedThinkingMode={state.selectedThinkingMode}
             selectedThinkingEffort={state.selectedThinkingEffort}
@@ -710,7 +713,10 @@ const FloatingPromptInputInner = (
             executionEngineConfig={state.executionEngineConfig}
             setExecutionEngineConfig={(config) => dispatch({ type: "SET_EXECUTION_ENGINE_CONFIG", payload: config })}
             selectedModel={state.selectedModel}
-            setSelectedModel={(model) => dispatch({ type: "SET_MODEL", payload: model })}
+            setSelectedModel={(model) => {
+              dispatch({ type: "SET_MODEL", payload: model });
+              setDefaultModel(model);
+            }}
             availableModels={availableModels}
             selectedThinkingMode={state.selectedThinkingMode}
             selectedThinkingEffort={state.selectedThinkingEffort}

@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useContext, createContext, ReactNode, useEffect } from 'react';
+import { api } from '@/lib/api';
 import type { Session } from '@/lib/api';
 import { createSessionWindow, emitWindowSyncEvent, onWindowSyncEvent, isSessionWindow } from '@/lib/windowManager';
 
@@ -129,6 +130,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
       setActiveTabId(validActiveTabId);
     } catch (error) {
       console.error('[useTabs] Failed to restore tabs:', error);
+      api.platform.writeSessionMgmtLog('error', 'storage', `restoreTabs failed: ${String(error)}`).catch(() => {});
       localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
@@ -139,6 +141,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs, activeTabId }));
     } catch (error) {
       console.error('[useTabs] Failed to persist tabs:', error);
+      api.platform.writeSessionMgmtLog('error', 'storage', `persistTabs failed: ${String(error)}`).catch(() => {});
     }
   }, [tabs, activeTabId]);
 
@@ -207,10 +210,16 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
     };
 
     setTabs(prev => [...prev, newTab]);
-    
+
     if (activate) {
       setActiveTabId(newTabId);
     }
+
+    api.platform.writeSessionMgmtLog(
+      'info',
+      'tab',
+      `created ${newTabId} type=${newTab.type} project=${newTab.projectPath ?? '-'} activate=${activate}`,
+    ).catch(() => {});
 
     return newTabId;
   }, [generateTabId, generateTabTitle]);
@@ -225,6 +234,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
       )
     );
     setActiveTabId(tabId);
+    api.platform.writeSessionMgmtLog('info', 'tab', `switched to ${tabId}`).catch(() => {});
   }, []);
 
   // Check if tab can be closed
@@ -238,6 +248,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
 
   // ✨ REFACTORED: Force close tab (use cleanup callbacks ref)
   const forceCloseTab = useCallback(async (tabId: string) => {
+    api.platform.writeSessionMgmtLog('info', 'tab', `closing ${tabId}`).catch(() => {});
     // Execute cleanup callback if present
     const cleanup = cleanupCallbacksRef.current.get(tabId);
     if (cleanup) {
@@ -245,6 +256,7 @@ export const TabProvider: React.FC<TabProviderProps> = ({ children }) => {
         await cleanup();
       } catch (error) {
         console.error(`[useTabs] Cleanup failed for tab ${tabId}:`, error);
+        api.platform.writeSessionMgmtLog('error', 'tab', `cleanup failed ${tabId}: ${String(error)}`).catch(() => {});
         // Continue closing anyway
       }
       cleanupCallbacksRef.current.delete(tabId);

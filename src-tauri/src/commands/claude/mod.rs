@@ -6,6 +6,7 @@ mod models;
 mod paths;
 mod platform;
 mod project_store;
+mod pty_runner;
 mod session_history;
 
 pub use models::*;
@@ -17,6 +18,7 @@ pub use self::cli_runner::{
     get_claude_session_output, list_running_claude_sessions, resume_claude_code,
     resume_claude_code_with_deps, ClaudeProcessState, ClaudeSpawnDeps,
 };
+pub use self::pty_runner::{execute_claude_pty, pty_resize, pty_send_input};
 pub use self::config::{
     check_claude_version, clear_custom_claude_path, ensure_onboarding_complete,
     find_claude_md_files, get_available_tools,

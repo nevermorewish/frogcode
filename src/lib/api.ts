@@ -1162,6 +1162,26 @@ export const api = {
   },
 
   /**
+   * PTY execution channel — spawn Claude CLI inside a pseudo-terminal so its
+   * interactive Ink-based menus (API key prompt, /login wizard, workspace
+   * trust) can be answered by the user via an xterm panel in the UI.
+   * Returns the synthetic session_id (of the form `pty-<uuid>`) which the
+   * frontend uses to subscribe to `pty-output:<sid>` events and to call
+   * `pty.sendInput` / `pty.resize`.
+   */
+  pty: {
+    async execute(projectPath: string, prompt: string, model: string, tabId?: string): Promise<string> {
+      return invoke("execute_claude_pty", { projectPath, prompt, model, tabId });
+    },
+    async sendInput(sessionId: string, data: string): Promise<void> {
+      return invoke("pty_send_input", { sessionId, data });
+    },
+    async resize(sessionId: string, cols: number, rows: number): Promise<void> {
+      return invoke("pty_resize", { sessionId, cols, rows });
+    },
+  },
+
+  /**
    * Continues an existing Claude Code conversation with streaming output
    * @param planMode - Enable Plan Mode for read-only research and planning
    * @param tabId - Unique identifier for the tab, used to filter global events
@@ -4298,6 +4318,41 @@ export const api = {
     /** Write a log line to the sidecar log file (visible in system log view). */
     async writeLog(level: string, message: string): Promise<void> {
       return await invoke("platform_write_log", { level, message });
+    },
+
+    /** Read tail of OpenClaw log (~/.frogcode/openclaw/config/openclaw.log). */
+    async readOpenclawLog(lines?: number): Promise<{
+      path: string;
+      exists: boolean;
+      totalLines?: number;
+      lines: string[];
+    }> {
+      return await invoke("openclaw_read_log", { lines });
+    },
+
+    /** Read tail of the tool-install log (~/.frogcode/install.log). */
+    async readInstallLog(lines?: number): Promise<{
+      path: string;
+      exists: boolean;
+      totalLines?: number;
+      lines: string[];
+    }> {
+      return await invoke("install_read_log", { lines });
+    },
+
+    /** Read tail of the session-management log (~/.frogcode/session-management.log). */
+    async readSessionMgmtLog(lines?: number): Promise<{
+      path: string;
+      exists: boolean;
+      totalLines?: number;
+      lines: string[];
+    }> {
+      return await invoke("session_mgmt_read_log", { lines });
+    },
+
+    /** Append a session-management log line from the UI side. */
+    async writeSessionMgmtLog(level: string, category: string, message: string): Promise<void> {
+      return await invoke("session_mgmt_write_log", { level, category, message });
     },
 
     async getAgentConfig(agentType: string): Promise<Record<string, any>> {

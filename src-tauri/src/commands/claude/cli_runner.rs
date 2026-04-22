@@ -802,7 +802,18 @@ pub async fn cancel_claude_execution_with_deps(
 pub async fn list_running_claude_sessions(
     registry: tauri::State<'_, crate::process::ProcessRegistryState>,
 ) -> Result<Vec<crate::process::ProcessInfo>, String> {
-    registry.0.get_running_claude_sessions()
+    match registry.0.get_running_claude_sessions() {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            crate::commands::platform_bridge::append_session_log(
+                "rust",
+                "error",
+                "cli",
+                &format!("list_running_claude_sessions: {}", e),
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Get live output from a Claude session
@@ -865,10 +876,45 @@ pub async fn spawn_claude_process_with_deps(
         cmd.arg(&prompt);
     }
 
+    // Defensive: avoid the "Detected a custom API key" interactive prompt that
+    // would otherwise hang the session. If settings.json has ANTHROPIC_API_KEY
+    // but no apiKeyHelper, inject one before spawning.
+    match crate::commands::provider::ensure_api_key_helper_for_spawn() {
+        Ok(true) => {
+            crate::commands::platform_bridge::append_session_log(
+                "rust",
+                "info",
+                "cli",
+                "auto-injected apiKeyHelper to bypass Claude CLI interactive API-key prompt",
+            );
+        }
+        Ok(false) => {}
+        Err(e) => {
+            crate::commands::platform_bridge::append_session_log(
+                "rust",
+                "warn",
+                "cli",
+                &format!("ensure_api_key_helper_for_spawn failed (continuing): {}", e),
+            );
+        }
+    }
+
     // Spawn the process
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Claude: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        crate::commands::platform_bridge::append_session_log(
+            "rust",
+            "error",
+            "cli",
+            &format!("spawn Claude failed: {}", e),
+        );
+        format!("Failed to spawn Claude: {}", e)
+    })?;
+    crate::commands::platform_bridge::append_session_log(
+        "rust",
+        "info",
+        "cli",
+        &format!("spawned Claude pid={:?}", child.id()),
+    );
 
     // 🔥 普通 prompt 通过 stdin 管道传递，避免命令行长度限制
     // 斜杠命令已通过 -p 参数传递，不需要 stdin
@@ -1178,6 +1224,12 @@ pub async fn spawn_claude_process_with_deps(
         match child.wait().await {
             Ok(status) => {
                 log::info!("Claude process exited with status: {}", status);
+                crate::commands::platform_bridge::append_session_log(
+                    "rust",
+                    "info",
+                    "cli",
+                    &format!("Claude exited success={} code={:?}", status.success(), status.code()),
+                );
                 // Add a small delay to ensure all messages are processed
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 if let Some(ref session_id) = *session_id_holder_clone3.lock().unwrap() {

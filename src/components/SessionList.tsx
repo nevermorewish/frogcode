@@ -131,6 +131,7 @@ export const SessionList: React.FC<SessionListProps> = ({
       setClaudeMdFiles(files);
     } catch (err) {
       console.error('Failed to load CLAUDE.md files:', err);
+      api.platform.writeSessionMgmtLog('error', 'session', `loadClaudeMdFiles(${projectPath}): ${String(err)}`).catch(() => {});
       setClaudeMdFiles([]);
     } finally {
       setLoadingClaudeMd(false);

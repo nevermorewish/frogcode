@@ -395,38 +395,32 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
         run: |
-          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_KEY" ]; then
-            echo "::warning::DEPLOY_HOST or DEPLOY_SSH_KEY not set, skipping server upload"
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_PASSWORD" ]; then
+            echo "::warning::DEPLOY_HOST or DEPLOY_PASSWORD not set, skipping server upload"
             exit 0
           fi
+
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass >/dev/null 2>&1
 
           VERSION="${GITHUB_REF_NAME#v}"
           REMOTE_DIR="/www/wwwroot/frogclaw.com/downloads/${VERSION}"
 
-          # Setup SSH key
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
+          export SSHPASS="$DEPLOY_PASSWORD"
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
 
           # Create remote directory
-          ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${REMOTE_DIR}"
+          sshpass -e ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${REMOTE_DIR}"
 
           # Collect all release files and upload
           find artifacts -type f \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
             -o -name "*.msi" -o -name "*.msi.sig" -o -name "*-setup.exe" -o -name "*-setup.exe.sig" \
             -o -name "*-portable.exe" -o -name "*.AppImage" -o -name "*.AppImage.sig" \
-            -o -name "*.deb" -o -name "*.deb.sig" -o -name "*.rpm" \) -exec scp $SSH_OPTS {} "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/" \;
+            -o -name "*.deb" -o -name "*.deb.sig" -o -name "*.rpm" \) -exec sshpass -e scp $SSH_OPTS {} "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/" \;
 
           # Upload latest.json to both version dir and downloads root
-          scp $SSH_OPTS latest.json "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
-          scp $SSH_OPTS latest.json "${DEPLOY_USER}@${DEPLOY_HOST}:/www/wwwroot/frogclaw.com/downloads/"
+          sshpass -e scp $SSH_OPTS latest.json "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
+          sshpass -e scp $SSH_OPTS latest.json "${DEPLOY_USER}@${DEPLOY_HOST}:/www/wwwroot/frogclaw.com/downloads/"
 
           echo "Uploaded release ${VERSION} to ${DEPLOY_HOST}:${REMOTE_DIR}"
-
-          # Cleanup SSH key
-          rm -f ~/.ssh/deploy_key

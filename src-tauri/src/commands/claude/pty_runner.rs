@@ -48,23 +48,9 @@ pub async fn execute_claude_pty(
         .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
     let claude_path = crate::claude_binary::find_claude_binary_with_data_dir(&data_dir)?;
 
-    // A+B carry-over: bypass the API-key interactive prompt by injecting
-    // apiKeyHelper if it is missing.
-    match crate::commands::provider::ensure_api_key_helper_for_spawn() {
-        Ok(true) => crate::commands::platform_bridge::append_session_log(
-            "rust",
-            "info",
-            "cli",
-            "[pty] auto-injected apiKeyHelper before spawn",
-        ),
-        Ok(false) => {}
-        Err(e) => crate::commands::platform_bridge::append_session_log(
-            "rust",
-            "warn",
-            "cli",
-            &format!("[pty] ensure_api_key_helper_for_spawn failed: {}", e),
-        ),
-    }
+    // 🔥 REMOVED: apiKeyHelper auto-injection causes "Auth conflict" with ANTHROPIC_API_KEY
+    // Claude CLI error: "Both a token (apiKeyHelper) and an API key (ANTHROPIC_API_KEY) are set"
+    // Solution: Let users manage apiKeyHelper manually if needed, don't auto-inject
 
     // Build CLI args via the same builder cli_runner uses, so permission
     // config and skip flags stay consistent across both channels.

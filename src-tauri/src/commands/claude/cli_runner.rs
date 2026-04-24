@@ -892,28 +892,9 @@ pub async fn spawn_claude_process_with_deps(
         cmd.arg(&prompt);
     }
 
-    // Defensive: avoid the "Detected a custom API key" interactive prompt that
-    // would otherwise hang the session. If settings.json has ANTHROPIC_API_KEY
-    // but no apiKeyHelper, inject one before spawning.
-    match crate::commands::provider::ensure_api_key_helper_for_spawn() {
-        Ok(true) => {
-            crate::commands::platform_bridge::append_session_log(
-                "rust",
-                "info",
-                "cli",
-                "auto-injected apiKeyHelper to bypass Claude CLI interactive API-key prompt",
-            );
-        }
-        Ok(false) => {}
-        Err(e) => {
-            crate::commands::platform_bridge::append_session_log(
-                "rust",
-                "warn",
-                "cli",
-                &format!("ensure_api_key_helper_for_spawn failed (continuing): {}", e),
-            );
-        }
-    }
+    // 🔥 REMOVED: apiKeyHelper auto-injection causes "Auth conflict" with ANTHROPIC_API_KEY
+    // Claude CLI error: "Both a token (apiKeyHelper) and an API key (ANTHROPIC_API_KEY) are set"
+    // Solution: Let users manage apiKeyHelper manually if needed, don't auto-inject
 
     // Spawn the process
     let mut child = cmd.spawn().map_err(|e| {

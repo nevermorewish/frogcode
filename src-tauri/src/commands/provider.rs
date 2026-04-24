@@ -389,26 +389,12 @@ pub async fn switch_provider_config(
         }
     }
 
-    // apiKeyHelper 根据用户勾选状态决定是否自动生成
-    // 默认 true：避免 Claude CLI 启动时弹"Detected a custom API key"
-    // 交互菜单导致会话卡死。用户显式设 false 才会跳过自动生成。
-    if config.enable_auto_api_key_helper.unwrap_or(true) {
-        if let Some(token) = auth_token {
-            let helper_command = format!("echo '{}'", token);
-            settings_obj.insert(
-                "apiKeyHelper".to_string(),
-                serde_json::Value::String(helper_command),
-            );
-            log::info!("用户启用了自动生成 apiKeyHelper，已生成命令: echo '[TOKEN_MASKED]'");
-        } else {
-            log::info!("用户启用了自动生成，但未找到认证令牌，无法生成 apiKeyHelper");
-            settings_obj.remove("apiKeyHelper");
-        }
-    } else {
-        // 用户未勾选自动生成，移除 apiKeyHelper 字段
-        settings_obj.remove("apiKeyHelper");
-        log::info!("用户未启用自动生成 apiKeyHelper，已移除该字段");
-    }
+    // 🔥 REMOVED: apiKeyHelper 与 ANTHROPIC_API_KEY 冲突
+    // Claude CLI 报错: "Auth conflict: Both a token (apiKeyHelper) and an API key (ANTHROPIC_API_KEY) are set"
+    // 解决方案：始终移除 apiKeyHelper，只使用 ANTHROPIC_API_KEY 环境变量
+    settings_obj.remove("apiKeyHelper");
+    log::info!("已移除 apiKeyHelper 以避免与 ANTHROPIC_API_KEY 冲突");
+
 
     // 保存设置
     save_settings(&settings)?;

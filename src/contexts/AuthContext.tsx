@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { api, type FrogclawUserData, type FrogclawToken, type FrogclawSystemProvider, type FrogclawCliProvider, normalizeImChannelsData } from '@/lib/api';
+import { serializeCodexConfigToml } from '@/lib/codexToml';
 
 export interface OpenClawModelInfo {
   id: string;
@@ -38,6 +39,7 @@ const AUTH_SELECTED_TOKEN_KEY = 'frogclaw_selected_token'; // legacy, for migrat
 const AUTH_ENGINE_TOKENS_KEY = 'frogclaw_engine_tokens';
 const AUTH_OPENCLAW_MODELS_KEY = 'frogclaw_openclaw_models';
 const AUTH_FEISHU_APPID_KEY = 'frogclaw_feishu_appid';
+const AUTH_CLI_PROVIDERS_KEY = 'frogclaw_cli_providers';
 const FROGCLAW_PROVIDER_PREFIX = 'frogclaw-';
 const CLAUDE_MAX_GROUP = 'Claude Max';
 const DEFAULT_GROUP = 'default';
@@ -234,10 +236,32 @@ function findMissingGroups(
   return Array.from(missing);
 }
 
+function findCliProviderForEngine(
+  cliProviders: FrogclawCliProvider[],
+  engine: EngineId,
+): FrogclawCliProvider | undefined {
+  const matching = cliProviders.filter(p => p.provider_type === engine);
+  if (matching.length === 0) return undefined;
+  const def = matching.find(p => p.is_default);
+  if (def) return def;
+  return matching.slice().sort((a, b) => (b.updated_time ?? 0) - (a.updated_time ?? 0))[0];
+}
+
+function parseGeminiSettingsText(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const re = /"([A-Z_][A-Z0-9_]*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    result[m[1]] = m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return result;
+}
+
 async function setupProviders(
   systemProviders: FrogclawSystemProvider[],
   allTokens: FrogclawToken[],
   engineTokens: EngineTokenMap,
+  cliProviders: FrogclawCliProvider[],
 ) {
   const FROGCLAW_URL = 'https://frogclaw.com';
   const FROGCLAW_URL_V1 = 'https://frogclaw.com/v1';
@@ -257,15 +281,33 @@ async function setupProviders(
 
     try {
       if (providerType === 'claude') {
+        const cli = findCliProviderForEngine(cliProviders, 'claude');
+        let baseUrl = FROGCLAW_URL;
+        let model: string | undefined = sp.default_model || undefined;
+        if (cli?.settings_config) {
+          try {
+            const parsed = JSON.parse(cli.settings_config);
+            const env = parsed?.env;
+            if (env && typeof env === 'object' && typeof env.ANTHROPIC_BASE_URL === 'string' && env.ANTHROPIC_BASE_URL) {
+              baseUrl = env.ANTHROPIC_BASE_URL;
+            }
+            if (typeof parsed?.model === 'string' && parsed.model) {
+              model = parsed.model;
+            }
+          } catch {
+            // fall through with synthesized defaults
+          }
+        }
+
         const existing = await api.getProviderPresets();
         const found = existing.find(p => p.name === providerName);
         const config = {
           name: providerName,
           description: `Frogclaw - ${sp.name}`,
-          base_url: FROGCLAW_URL,
+          base_url: baseUrl,
           auth_token: '',
           api_key: apiKey,
-          model: sp.default_model || undefined,
+          model,
           enable_auto_api_key_helper: true,
         };
         if (found) {
@@ -276,9 +318,47 @@ async function setupProviders(
           await api.switchProviderConfig({ id, ...config });
         }
       } else if (providerType === 'codex') {
+        const cli = findCliProviderForEngine(cliProviders, 'codex');
+        let configToml = '';
+        if (cli?.settings_config) {
+          try {
+            const parsed = JSON.parse(cli.settings_config);
+            const tomlObj = parsed?.['config.toml'];
+            if (tomlObj && typeof tomlObj === 'object') {
+              if (!tomlObj.model && sp.default_model) {
+                tomlObj.model = sp.default_model;
+              }
+              configToml = serializeCodexConfigToml(tomlObj);
+            }
+          } catch {
+            // fall through to synthesized fallback
+          }
+        }
+        if (!configToml) {
+          // Fallback: synthesize a cc-switch-style TOML so even the degraded
+          // path produces a config codex CLI can parse.
+          const cleanName = (sp.name || 'custom')
+            .toLowerCase()
+            .replace(/[^a-z0-9_]/g, '_')
+            .replace(/^_+|_+$/g, '') || 'custom';
+          configToml = serializeCodexConfigToml({
+            model_provider: cleanName,
+            model: sp.default_model || '',
+            model_reasoning_effort: 'high',
+            disable_response_storage: true,
+            model_providers: {
+              [cleanName]: {
+                name: cleanName,
+                base_url: FROGCLAW_URL_V1,
+                wire_api: 'responses',
+                requires_openai_auth: true,
+              },
+            },
+          });
+        }
+
         const existing = await api.getCodexProviderPresets();
         const found = existing.find(p => p.name === providerName);
-        const configToml = `model = "${sp.default_model || 'gpt-4.1'}"\nprovider = "openai"\nbase_url = "${FROGCLAW_URL_V1}"`;
         const config = {
           name: providerName,
           description: `Frogclaw - ${sp.name}`,
@@ -294,15 +374,26 @@ async function setupProviders(
           await api.switchCodexProvider({ id, ...config });
         }
       } else if (providerType === 'gemini') {
-        const existing = await api.getGeminiProviderPresets();
-        const found = existing.find(p => p.name === providerName);
+        const cli = findCliProviderForEngine(cliProviders, 'gemini');
         const env: Record<string, string> = {
           GEMINI_API_KEY: apiKey,
           GOOGLE_GEMINI_BASE_URL: FROGCLAW_URL,
         };
-        if (sp.default_model) {
+        if (cli?.settings_config) {
+          const parsed = parseGeminiSettingsText(cli.settings_config);
+          if (parsed.GOOGLE_GEMINI_BASE_URL) {
+            env.GOOGLE_GEMINI_BASE_URL = parsed.GOOGLE_GEMINI_BASE_URL;
+          }
+          if (parsed.GOOGLE_GEMINI_MODEL) {
+            env.GEMINI_MODEL = parsed.GOOGLE_GEMINI_MODEL;
+          }
+        }
+        if (!env.GEMINI_MODEL && sp.default_model) {
           env.GEMINI_MODEL = sp.default_model;
         }
+
+        const existing = await api.getGeminiProviderPresets();
+        const found = existing.find(p => p.name === providerName);
         const config = {
           name: providerName,
           description: `Frogclaw - ${sp.name}`,
@@ -439,6 +530,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const [systemProviders, setSystemProviders] = useState<FrogclawSystemProvider[]>([]);
 
+  const [cliProviders, setCliProviders] = useState<FrogclawCliProvider[]>(() => {
+    const saved = localStorage.getItem(AUTH_CLI_PROVIDERS_KEY);
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
+  });
+
   const [openclawModels, setOpenclawModels] = useState<OpenClawModelInfo[]>(() => {
     const saved = localStorage.getItem(AUTH_OPENCLAW_MODELS_KEY);
     if (saved) {
@@ -503,8 +602,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           setUser(session.user);
           setTokens(session.tokens);
           setSystemProviders(session.system_providers);
+          setCliProviders(session.cli_providers || []);
           localStorage.setItem(AUTH_USER_KEY, JSON.stringify(session.user));
           localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+          localStorage.setItem(AUTH_CLI_PROVIDERS_KEY, JSON.stringify(session.cli_providers || []));
 
           // Always fetch and apply openclaw config on startup
           applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
@@ -527,13 +628,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               const merged = { ...autoSelected, ...validated };
               setEngineTokens(merged);
               localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(merged));
-              setupProviders(session.system_providers, session.tokens, merged);
+              setupProviders(session.system_providers, session.tokens, merged, session.cli_providers || []);
             } catch {
               // Fallback: auto-select all
               const autoSelected = autoSelectTokens(session.tokens, session.system_providers, session.cli_providers);
               setEngineTokens(autoSelected);
               localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(autoSelected));
-              setupProviders(session.system_providers, session.tokens, autoSelected);
+              setupProviders(session.system_providers, session.tokens, autoSelected, session.cli_providers || []);
             }
           }
         })
@@ -547,6 +648,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           localStorage.removeItem(AUTH_ENGINE_TOKENS_KEY);
           localStorage.removeItem(AUTH_OPENCLAW_MODELS_KEY);
           localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
+          localStorage.removeItem(AUTH_CLI_PROVIDERS_KEY);
         });
     } catch {
       localStorage.removeItem(AUTH_CRED_KEY);
@@ -574,9 +676,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(session.user);
     setTokens(session.tokens);
     setSystemProviders(session.system_providers);
+    setCliProviders(session.cli_providers || []);
 
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(session.user));
     localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+    localStorage.setItem(AUTH_CLI_PROVIDERS_KEY, JSON.stringify(session.cli_providers || []));
 
     // Fetch and apply openclaw config
     applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
@@ -588,7 +692,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       );
       setEngineTokens(autoTokens);
       localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(autoTokens));
-      await setupProviders(session.system_providers, session.tokens, autoTokens);
+      await setupProviders(session.system_providers, session.tokens, autoTokens, session.cli_providers || []);
     }
   }, []);
 
@@ -608,7 +712,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const session = await api.ensureFrogclawGroupToken(u, p, group);
       setTokens(session.tokens);
       setSystemProviders(session.system_providers);
+      setCliProviders(session.cli_providers || []);
       localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+      localStorage.setItem(AUTH_CLI_PROVIDERS_KEY, JSON.stringify(session.cli_providers || []));
 
       const autoTokens = autoSelectTokens(
         session.tokens, session.system_providers, session.cli_providers,
@@ -624,7 +730,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const merged = { ...autoTokens, ...preserved };
       setEngineTokens(merged);
       localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(merged));
-      await setupProviders(session.system_providers, session.tokens, merged);
+      await setupProviders(session.system_providers, session.tokens, merged, session.cli_providers || []);
     } catch (err) {
       console.error(`[Auth] ensureGroupToken(${group}) failed:`, err);
     }
@@ -647,9 +753,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       PROVIDER_KEY_MAP[sp.provider_key] === engine,
     );
     if (relevantProviders.length > 0) {
-      await setupProviders(relevantProviders, tokens, updated);
+      await setupProviders(relevantProviders, tokens, updated, cliProviders);
     }
-  }, [tokens, systemProviders, engineTokens]);
+  }, [tokens, systemProviders, engineTokens, cliProviders]);
 
   /** Switch ALL engines to the same token (backward compat, used by sidebar) */
   const selectToken = useCallback(async (tokenId: number) => {
@@ -668,8 +774,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     setEngineTokens(updated);
     localStorage.setItem(AUTH_ENGINE_TOKENS_KEY, JSON.stringify(updated));
-    await setupProviders(systemProviders, tokens, updated);
-  }, [tokens, systemProviders, openclawModels]);
+    await setupProviders(systemProviders, tokens, updated, cliProviders);
+  }, [tokens, systemProviders, openclawModels, cliProviders]);
 
   const refreshProviders = useCallback(async () => {
     const cred = localStorage.getItem(AUTH_CRED_KEY);
@@ -680,7 +786,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const session = await api.fetchFrogclawProviders(u, p);
       setTokens(session.tokens);
       setSystemProviders(session.system_providers);
+      setCliProviders(session.cli_providers || []);
       localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify(session.tokens));
+      localStorage.setItem(AUTH_CLI_PROVIDERS_KEY, JSON.stringify(session.cli_providers || []));
 
       // Also refresh openclaw config
       applyOpenclawInfo(session, setOpenclawModels, setFeishuAppId);
@@ -693,6 +801,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(null);
     setTokens([]);
     setSystemProviders([]);
+    setCliProviders([]);
     setEngineTokens({});
     setOpenclawModels([]);
     setFeishuAppId(null);
@@ -703,6 +812,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     localStorage.removeItem(AUTH_ENGINE_TOKENS_KEY);
     localStorage.removeItem(AUTH_OPENCLAW_MODELS_KEY);
     localStorage.removeItem(AUTH_FEISHU_APPID_KEY);
+    localStorage.removeItem(AUTH_CLI_PROVIDERS_KEY);
   }, []);
 
   const getRecommendedGroup = useCallback((engine: EngineId) => {

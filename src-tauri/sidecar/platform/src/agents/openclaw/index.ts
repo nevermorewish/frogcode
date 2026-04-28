@@ -24,6 +24,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import type {
@@ -214,6 +215,89 @@ function isPortInUse(port: number): Promise<boolean> {
       resolve(false);
     });
   });
+}
+
+/**
+ * Probe the gateway's /healthz endpoint. Returns true only if the response is
+ * 200 with `{ ok: true }` — i.e. an actual openclaw gateway is fully ready,
+ * not just any TCP listener. Used to attach to an existing gateway (e.g. one
+ * orphaned by a previous frogcode crash) instead of killing and respawning,
+ * which would force the user to wait for the slow cold-start path.
+ */
+function probeHealthyGateway(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port, path: '/healthz', timeout: 2000 },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => {
+          if (res.statusCode !== 200) return resolve(false);
+          try {
+            const data = JSON.parse(body);
+            resolve(data?.ok === true);
+          } catch {
+            resolve(false);
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Find an openclaw gateway lock file matching our configPath. The official
+ * openclaw CLI writes `{tmp}/openclaw/gateway.<hash>.lock` containing
+ * `{ pid, configPath, ... }`. If a live process holds a lock with our
+ * configPath, that's our gateway from a previous run — we can attach to it
+ * instead of killing.
+ */
+function findOurGatewayLock(
+  ourConfigPath: string,
+  tmpDir: string,
+): { pid: number; lockPath: string } | null {
+  const osTmpOpenClaw = path.join(
+    process.env.TEMP || process.env.TMPDIR || '/tmp',
+    'openclaw',
+  );
+  const dirs = Array.from(new Set([path.resolve(tmpDir), path.resolve(osTmpOpenClaw)]));
+  const normalize = (p: string) => path.resolve(p).toLowerCase();
+  const ourNorm = normalize(ourConfigPath);
+
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith('gateway.') || !entry.endsWith('.lock')) continue;
+      const lockPath = path.join(dir, entry);
+      try {
+        const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+        const pid = data?.pid;
+        const cfg = typeof data?.configPath === 'string' ? data.configPath : '';
+        if (typeof pid !== 'number' || pid <= 0) continue;
+        if (!cfg || normalize(cfg) !== ourNorm) continue;
+        // Verify the pid is alive
+        try {
+          process.kill(pid, 0);
+        } catch {
+          continue; // dead — skip
+        }
+        return { pid, lockPath };
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
 }
 
 function resolveOpenClawBin(binPath?: string | null): string {
@@ -491,8 +575,6 @@ export class OpenClawAgent implements Agent {
   private lastError: string | null = null;
   /** Lazy writer — constructed in ensureGateway, reused across provider updates. */
   private configWriter: OpenClawConfigWriter | null = null;
-  /** Concurrency guard — prevents two ensureGateway() calls from racing. */
-  private ensureGatewayPromise: Promise<void> | null = null;
 
   constructor(config: OpenClawAgentConfig = {}) {
     this.config = config;
@@ -632,16 +714,6 @@ export class OpenClawAgent implements Agent {
   // ─── Internals ──────────────────────────────────────────────────────────
 
   private async ensureGateway(): Promise<void> {
-    if (this.ensureGatewayPromise) {
-      return this.ensureGatewayPromise;
-    }
-    this.ensureGatewayPromise = this._ensureGatewayImpl().finally(() => {
-      this.ensureGatewayPromise = null;
-    });
-    return this.ensureGatewayPromise;
-  }
-
-  private async _ensureGatewayImpl(): Promise<void> {
     // Resolve binary (throws if not found — user gets clear error)
     const binPath = resolveOpenClawBin(this.config.binPath);
     const stateDir = this.config.stateDir || DEFAULT_STATE_DIR;
@@ -700,6 +772,55 @@ export class OpenClawAgent implements Agent {
     log('info', `configPath=${configPath}`);
     log('info', `extensionsDir=${extensionsDir}`);
     log('info', `tmpDir=${tmpDir}`);
+
+    // ── Fast path: attach to an existing healthy gateway ─────────────
+    // If a gateway is already ready on our port AND its lock file shows it
+    // belongs to our configPath (i.e. was spawned by a previous frogcode run
+    // that crashed/exited without cleanup), reuse it instead of killing and
+    // respawning. Cold-start can take 60-90s on Windows; attaching is instant.
+    if (await probeHealthyGateway(port)) {
+      const ours = findOurGatewayLock(configPath, tmpDir);
+      if (ours) {
+        log('info', `attaching to existing healthy gateway pid=${ours.pid} on port ${port}`);
+        // Refresh the pid file so future orphan-reaping targets the right process
+        try {
+          fs.writeFileSync(path.join(stateDir, '.gateway.pid'), String(ours.pid));
+        } catch { /* best-effort */ }
+
+        // Connect WS only — no process spawn.
+        let resolvedGatewayToken = this.config.gatewayToken || undefined;
+        if (!resolvedGatewayToken) {
+          try {
+            const ocCfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const cfgToken = ocCfg?.gateway?.auth?.token;
+            if (typeof cfgToken === 'string' && cfgToken) {
+              resolvedGatewayToken = cfgToken;
+            }
+          } catch { /* ignore */ }
+        }
+        this.wsClient = new OpenClawWsClient({
+          baseUrl: `http://127.0.0.1:${port}`,
+          gatewayToken: resolvedGatewayToken,
+          stateDir,
+        });
+        this.wsClient.connect();
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('OpenClaw WS handshake timed out (60s) attaching to existing gateway'));
+          }, 60_000);
+          this.wsClient!.once('connected', () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+        });
+        this.started = true;
+        log('info', `attached to existing gateway on port ${port}, WS connected`);
+        return;
+      }
+      // Healthy listener but not ours — fall through to kill+spawn so we
+      // don't share a gateway with another tool.
+      log('info', `port ${port} held by foreign gateway; will kill and respawn`);
+    }
 
     // Preempt any stray official openclaw / openclaw-gateway the user may have
     // started manually — otherwise its own port-preflight will SIGTERM our
@@ -769,16 +890,22 @@ export class OpenClawAgent implements Agent {
     };
     this.wsClient = new OpenClawWsClient(wsConfig);
 
-    // Wait for gateway to be ready (TCP probe) before connecting WS
-    await this.waitForGateway(port, 30_000);
+    // Wait for gateway to be ready (TCP probe) before connecting WS.
+    // Cold-start on Windows can take 60-90s before the port is bound, plus
+    // additional time for plugin init. 30s was way too tight and caused
+    // auto-start to silently fail; 180s gives generous headroom.
+    await this.waitForGateway(port, 180_000);
 
     this.wsClient.connect();
 
-    // Wait for WS handshake
+    // Wait for WS handshake. The gateway accepts WS as soon as the HTTP
+    // server is up, so this normally completes within a few seconds — but
+    // we keep it generous so a slow handshake doesn't tear down a working
+    // process.
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('OpenClaw WS handshake timed out (15s)'));
-      }, 15_000);
+        reject(new Error('OpenClaw WS handshake timed out (60s)'));
+      }, 60_000);
       this.wsClient!.once('connected', () => {
         clearTimeout(timeout);
         resolve();

@@ -171,7 +171,7 @@ export const IMChannelsView: React.FC = () => {
 
     // Keep platform config in sync for projectPath/enabled
     const cfg = await api.platform.getConfig().catch(() => ({
-      appId: '', appSecret: '', projectPath: '', enabled: false,
+      appId: '', appSecret: '', projectPath: '', enabled: false, openclawAutoStart: false,
     })) as any;
     await api.platform.saveConfig({
       ...cfg,

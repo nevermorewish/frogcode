@@ -166,7 +166,7 @@ export const WeChatSetupDialog: React.FC<WeChatSetupDialogProps> = ({
 
     // Sync platform config + reconcile
     const cfg = await api.platform.getConfig().catch(() => ({
-      appId: '', appSecret: '', projectPath: '', enabled: false,
+      appId: '', appSecret: '', projectPath: '', enabled: false, openclawAutoStart: false,
     })) as any;
     await api.platform.saveConfig({ ...cfg, enabled: assignment !== 'none' });
     try { await api.platform.reloadConfig(); } catch {}

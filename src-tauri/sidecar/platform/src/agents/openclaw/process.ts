@@ -161,6 +161,13 @@ export class OpenClawProcessManager extends EventEmitter {
     // Kill any orphan openclaw from a previous crashed run (recorded in pid file)
     reapOrphanFromPidFile(this.config.stateDir, (msg) => this.writeLog('info', msg));
 
+    // Defense-in-depth: kill whoever is currently bound to the gateway port.
+    // ensureGateway() in the agent layer already does this on the first spawn,
+    // but our internal scheduleRestart() path re-enters start() directly and
+    // would otherwise EADDRINUSE if a previous child orphaned a node.exe that
+    // outlived its cmd.exe wrapper (the Windows shell:true case).
+    killProcessOnPort(this.config.gatewayPort, (msg) => this.writeLog('info', msg));
+
     // Clean up stale gateway lock files left by crashed openclaw processes.
     // openclaw writes lock files to %TEMP%/openclaw/gateway.*.lock (or $TMPDIR)
     // and checks them on startup — stale locks cause false "already running" errors.
@@ -265,11 +272,37 @@ export class OpenClawProcessManager extends EventEmitter {
     }
     const child = this.child;
     this.writeLog('info', 'stopping...');
-    child.kill('SIGTERM');
+    // On Windows we spawn with `shell: true` so `child` is the cmd.exe wrapper
+    // and the real openclaw node.exe is its grandchild. A bare child.kill()
+    // only kills cmd.exe — node.exe gets reparented and keeps holding the
+    // gateway port, which is exactly the orphan we want to avoid here.
+    // Use `taskkill /f /t /pid` to walk the whole process tree.
+    if (process.platform === 'win32' && child.pid) {
+      try {
+        require('node:child_process').execSync(`taskkill /f /t /pid ${child.pid}`, {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+        });
+      } catch {
+        // Already gone, or taskkill missing — fall through to child.kill below
+        try { child.kill('SIGKILL'); } catch {}
+      }
+    } else {
+      child.kill('SIGTERM');
+    }
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         try {
-          child.kill('SIGKILL');
+          if (process.platform === 'win32' && child.pid) {
+            require('node:child_process').execSync(`taskkill /f /t /pid ${child.pid}`, {
+              stdio: 'ignore',
+              timeout: 3000,
+              windowsHide: true,
+            });
+          } else {
+            child.kill('SIGKILL');
+          }
         } catch {}
         resolve();
       }, 5000);
@@ -351,23 +384,24 @@ export class OpenClawProcessManager extends EventEmitter {
       const line = this.logTail[i];
       if (line.includes('Port') && line.includes('already in use')) {
         return (
-          `Port ${this.config.gatewayPort} is already in use by another process. ` +
-          `This usually means a global openclaw install is running as a Windows ` +
-          `scheduled task ("OpenClaw Gateway"). Stop it with: ` +
-          `schtasks /End /TN "OpenClaw Gateway"   or   openclaw gateway stop. ` +
-          `You can also change frogcode's gatewayPort in ~/.frogcode/agents/openclaw.json.`
+          `Port ${this.config.gatewayPort} is already in use by another process ` +
+          `(usually a previous openclaw gateway that didn't exit cleanly). ` +
+          `Try clicking Restart again — frogcode will now kill the port holder ` +
+          `before respawning. If it still fails, run: ` +
+          `taskkill /f /im openclaw.exe   (Windows)   or   pkill -f openclaw   (macOS/Linux). ` +
+          `As a last resort, change frogcode's gatewayPort in ~/.frogcode/agents/openclaw.json.`
         );
       }
       if (line.includes('gateway already running')) {
         return (
-          `Another openclaw gateway is already holding the lock. ` +
-          `Run:   openclaw gateway stop   or   schtasks /End /TN "OpenClaw Gateway"`
+          `Another openclaw gateway is already holding the lock file. ` +
+          `Try Restart again, or run:   openclaw gateway stop`
         );
       }
       if (line.includes('Gateway service appears registered')) {
         return (
-          `A Windows scheduled task is keeping openclaw alive in the background. ` +
-          `Disable it with:   schtasks /Change /TN "OpenClaw Gateway" /DISABLE`
+          `openclaw thinks a gateway service is registered for this state dir. ` +
+          `Run:   openclaw gateway stop   then click Restart.`
         );
       }
       if (line.includes('ENOENT') || line.includes('not found')) {

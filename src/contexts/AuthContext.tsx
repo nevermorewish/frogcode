@@ -495,7 +495,7 @@ async function syncFeishuToImChannels(appId: string, appSecret: string) {
   });
 
   const platformCfg = await api.platform.getConfig().catch(() => ({
-    appId: '', appSecret: '', projectPath: '', enabled: false,
+    appId: '', appSecret: '', projectPath: '', enabled: false, openclawAutoStart: false,
   })) as any;
   await api.platform.saveConfig({
     ...platformCfg,

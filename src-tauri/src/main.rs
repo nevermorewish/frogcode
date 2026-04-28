@@ -488,26 +488,77 @@ fn main() {
                 match commands::platform_bridge::platform_start(state, app_handle_for_platform.clone()).await {
                     Ok(_) => {
                         log::info!("Platform sidecar auto-started");
-                        if let Ok(cfg) = commands::platform_bridge::platform_get_config().await {
-                            // Connect Feishu bots if enabled — the sidecar reads
-                            // im-channels.json directly to determine which bots to
-                            // connect, so we don't need credentials here.
-                            if cfg.enabled {
-                                let state2 = app_handle_for_platform.state::<PlatformBridgeState>();
-                                let _ = commands::platform_bridge::platform_connect_feishu(state2).await;
-                                log::info!("Feishu auto-connected");
-                            }
-                            // Auto-start OpenClaw gateway if the user opted in.
-                            if cfg.openclaw_auto_start {
-                                let state3 = app_handle_for_platform.state::<PlatformBridgeState>();
-                                match commands::platform_bridge::platform_openclaw_start(state3).await {
-                                    Ok(_) => log::info!("OpenClaw gateway auto-started"),
-                                    Err(e) => log::warn!("OpenClaw gateway auto-start failed: {}", e),
+                        commands::platform_bridge::append_lifecycle_log(
+                            "autostart",
+                            "Platform sidecar auto-started",
+                        );
+                        match commands::platform_bridge::platform_get_config().await {
+                            Ok(cfg) => {
+                                commands::platform_bridge::append_lifecycle_log(
+                                    "autostart",
+                                    &format!(
+                                        "config loaded: enabled={} agentType={} openclawAutoStart={}",
+                                        cfg.enabled, cfg.agent_type, cfg.openclaw_auto_start
+                                    ),
+                                );
+                                // Connect Feishu bots if enabled — the sidecar reads
+                                // im-channels.json directly to determine which bots to
+                                // connect, so we don't need credentials here.
+                                if cfg.enabled {
+                                    let state2 = app_handle_for_platform.state::<PlatformBridgeState>();
+                                    let _ = commands::platform_bridge::platform_connect_feishu(state2).await;
+                                    log::info!("Feishu auto-connected");
+                                    commands::platform_bridge::append_lifecycle_log(
+                                        "autostart",
+                                        "Feishu auto-connect dispatched",
+                                    );
                                 }
+                                // Auto-start OpenClaw gateway if the user opted in.
+                                if cfg.openclaw_auto_start {
+                                    commands::platform_bridge::append_lifecycle_log(
+                                        "autostart",
+                                        "OpenClaw gateway auto-start dispatched",
+                                    );
+                                    let state3 = app_handle_for_platform.state::<PlatformBridgeState>();
+                                    match commands::platform_bridge::platform_openclaw_start(state3).await {
+                                        Ok(_) => {
+                                            log::info!("OpenClaw gateway auto-started");
+                                            commands::platform_bridge::append_lifecycle_log(
+                                                "autostart",
+                                                "OpenClaw gateway auto-started OK",
+                                            );
+                                        }
+                                        Err(e) => {
+                                            log::warn!("OpenClaw gateway auto-start failed: {}", e);
+                                            commands::platform_bridge::append_lifecycle_log(
+                                                "autostart",
+                                                &format!("OpenClaw gateway auto-start failed: {}", e),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    commands::platform_bridge::append_lifecycle_log(
+                                        "autostart",
+                                        "OpenClaw auto-start skipped (openclawAutoStart=false)",
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("platform_get_config failed: {}", e);
+                                commands::platform_bridge::append_lifecycle_log(
+                                    "autostart",
+                                    &format!("platform_get_config failed: {}", e),
+                                );
                             }
                         }
                     }
-                    Err(e) => log::warn!("Platform sidecar auto-start failed: {}", e),
+                    Err(e) => {
+                        log::warn!("Platform sidecar auto-start failed: {}", e);
+                        commands::platform_bridge::append_lifecycle_log(
+                            "autostart",
+                            &format!("Platform sidecar auto-start failed: {}", e),
+                        );
+                    }
                 }
             });
 

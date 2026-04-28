@@ -195,7 +195,7 @@ fn config_dir() -> Result<PathBuf, String> {
 /// Append a lifecycle event to the sidecar log file. Used to record
 /// spawn/kill/error events from the Rust parent so the user sees them
 /// in the same log stream as the sidecar's own stderr output.
-fn append_lifecycle_log(event: &str, detail: &str) {
+pub fn append_lifecycle_log(event: &str, detail: &str) {
     let Ok(dir) = config_dir() else { return };
     let path = dir.join("platform-sidecar.log");
     // Best effort — never fail the parent operation because logging failed.
@@ -817,7 +817,7 @@ pub async fn platform_start(
     let mut cmd = tokio::process::Command::new("node");
     cmd.arg(&sidecar_path)
         .arg("--port")
-        .arg("0")
+        .arg("18788")
         .arg("--config")
         .arg(cfg_path.to_string_lossy().as_ref())
         .stdout(std::process::Stdio::piped())

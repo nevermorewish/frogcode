@@ -491,6 +491,8 @@ export class OpenClawAgent implements Agent {
   private lastError: string | null = null;
   /** Lazy writer — constructed in ensureGateway, reused across provider updates. */
   private configWriter: OpenClawConfigWriter | null = null;
+  /** Concurrency guard — prevents two ensureGateway() calls from racing. */
+  private ensureGatewayPromise: Promise<void> | null = null;
 
   constructor(config: OpenClawAgentConfig = {}) {
     this.config = config;
@@ -630,6 +632,16 @@ export class OpenClawAgent implements Agent {
   // ─── Internals ──────────────────────────────────────────────────────────
 
   private async ensureGateway(): Promise<void> {
+    if (this.ensureGatewayPromise) {
+      return this.ensureGatewayPromise;
+    }
+    this.ensureGatewayPromise = this._ensureGatewayImpl().finally(() => {
+      this.ensureGatewayPromise = null;
+    });
+    return this.ensureGatewayPromise;
+  }
+
+  private async _ensureGatewayImpl(): Promise<void> {
     // Resolve binary (throws if not found — user gets clear error)
     const binPath = resolveOpenClawBin(this.config.binPath);
     const stateDir = this.config.stateDir || DEFAULT_STATE_DIR;

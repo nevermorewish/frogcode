@@ -124,7 +124,12 @@ const DevEnvironmentCard: React.FC<{
   const loadOpenclawStatus = useCallback(async () => {
     try {
       const s = await api.platform.getOpenclawStatus();
-      setOpenclawRunning(!!(s.active && s.processAlive && s.wsConnected));
+      // "Running" means the WS to the gateway is up and the agent is started.
+      // processAlive is only true when WE spawned the gateway — when we attach
+      // to an orphaned gateway from a previous frogcode crash (the fast-path
+      // in ensureGateway), processAlive stays false even though the gateway
+      // is fully functional. Don't gate on it.
+      setOpenclawRunning(!!(s.active && s.started && s.wsConnected));
     } catch {
       setOpenclawRunning(null);
     }

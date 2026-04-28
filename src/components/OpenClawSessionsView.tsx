@@ -374,7 +374,7 @@ export const OpenClawSessionsView: React.FC = () => {
           {/* Start / Stop / Restart controls (only when agent is openclaw) */}
           {status?.active && (
             <>
-              {status.processAlive ? (
+              {(status.processAlive || status.wsConnected) ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -450,10 +450,16 @@ export const OpenClawSessionsView: React.FC = () => {
         // Previously any "active && !running && !error" state showed
         // "Starting gateway..." which was misleading on a fresh open where
         // the singleton exists but the user hasn't clicked Start yet.
-        const running = status.active && status.wsConnected && status.processAlive;
+        //
+        // wsConnected is the source of truth for "running" — processAlive
+        // stays false when ensureGateway() attached to an orphan gateway
+        // from a previous frogcode run (the fast-path in OpenClawAgent).
+        // The user perceives that as "running" because chats work; gating
+        // on processAlive caused the UI to lie.
+        const running = status.active && status.wsConnected;
         const starting = status.active && status.processAlive && !status.wsConnected;
         const hasError = status.active && !!status.error;
-        const idle = status.active && !status.processAlive && !status.error;
+        const idle = status.active && !status.wsConnected && !status.processAlive && !status.error;
 
         return (
         <div className={cn(

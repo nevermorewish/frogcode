@@ -697,8 +697,8 @@ function createEventDispatcher(bot: BotConnection): lark.EventDispatcher {
         if (bot.agentManager.agentName === 'openclaw') {
           try {
             const ocStatus = getOpenClawAgent().status();
-            if (!ocStatus.started || !ocStatus.processAlive) {
-              log('warn', `OpenClaw gateway not running, notifying user`);
+            if (!ocStatus.started || !ocStatus.wsConnected) {
+              log('warn', `OpenClaw gateway not ready (started=${ocStatus.started} ws=${ocStatus.wsConnected}), notifying user`);
               await sendText(bot.larkClient, chatId, '\u26A0\uFE0F OpenClaw 网关未启动，请先在应用中启动 OpenClaw 后再发送消息。', userId);
               return;
             }
@@ -1203,7 +1203,7 @@ async function handleQQMessage(qqBot: QQBotConnection, msg: QQMessage): Promise<
   if (agentManager.agentName === 'openclaw') {
     try {
       const ocStatus = getOpenClawAgent().status();
-      if (!ocStatus.started || !ocStatus.processAlive) {
+      if (!ocStatus.started || !ocStatus.wsConnected) {
         await client.sendText(msg.replyCtx, '\u26A0\uFE0F OpenClaw 网关未启动，请先在应用中启动 OpenClaw 后再发送消息。');
         return;
       }
@@ -1380,7 +1380,7 @@ async function handleWeChatMessage(conn: WeChatConnection, msg: WeChatInboundMes
   if (agentManager.agentName === 'openclaw') {
     try {
       const ocStatus = getOpenClawAgent().status();
-      if (!ocStatus.started || !ocStatus.processAlive) {
+      if (!ocStatus.started || !ocStatus.wsConnected) {
         await client.sendText(msg.fromUserId, '\u26A0\uFE0F OpenClaw 网关未启动。');
         return;
       }
@@ -1791,6 +1791,21 @@ server.listen(args.port, '127.0.0.1', () => {
   _stdoutReady = true; // Enable stdout for READY signal
   process.stdout.write(`FROGCODE_PLATFORM_READY port=${actualPort}\n`);
   log('info', `listening on 127.0.0.1:${actualPort}`);
+
+  // Self-warmup the OpenClaw gateway if the user opted in. This is a backstop
+  // for the Rust-driven auto-start path (main.rs → /openclaw/start) so the
+  // gateway also comes up in deployments where Rust didn't trigger:
+  //   - older Rust binary that predates the auto-start block
+  //   - frogcode-web with an externally-managed sidecar
+  //   - direct CLI invocation of the sidecar for debugging
+  // Concurrent calls are deduped inside OpenClawAgent.ensureStartedOnce(), so
+  // if Rust ALSO posts /openclaw/start, only one ensureGateway() runs.
+  if (platformConfig?.openclawAutoStart) {
+    log('info', 'openclawAutoStart=true — warming up gateway in background');
+    getOpenClawAgent().warmUp().catch((e: any) => {
+      log('warn', `auto warm-up rejected unexpectedly: ${e?.message || e}`);
+    });
+  }
 });
 
 server.on('error', (e: any) => {

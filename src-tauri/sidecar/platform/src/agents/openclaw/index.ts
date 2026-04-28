@@ -573,6 +573,10 @@ export class OpenClawAgent implements Agent {
   private wsClient: OpenClawWsClient | null = null;
   private started = false;
   private lastError: string | null = null;
+  /** In-flight start promise — dedupes concurrent startGateway/warmUp calls
+   *  so two callers (e.g. Rust auto-start POST + sidecar self-warmup) don't
+   *  race ensureGateway() and spawn two competing gateways on the same port. */
+  private startPromise: Promise<void> | null = null;
   /** Lazy writer — constructed in ensureGateway, reused across provider updates. */
   private configWriter: OpenClawConfigWriter | null = null;
 
@@ -645,19 +649,22 @@ export class OpenClawAgent implements Agent {
     await new Promise((r) => setTimeout(r, 2000));
     this.lastError = null;
     try {
-      await this.ensureGateway();
+      await this.ensureStartedOnce();
     } catch (err: any) {
-      this.lastError = err.message || String(err);
+      this.lastError = err?.message || String(err);
+      throw err;
     }
   }
 
   async startGateway(): Promise<void> {
-    if (this.started) return;
+    // Throws on failure so callers (e.g. /openclaw/start HTTP handler, Rust
+    // auto-start) get the actual error instead of a misleading 200 OK.
     try {
-      await this.ensureGateway();
-      this.lastError = null;
+      await this.ensureStartedOnce();
     } catch (err: any) {
-      this.lastError = err.message || String(err);
+      this.lastError = err?.message || String(err);
+      log('error', `startGateway failed: ${this.lastError}`);
+      throw err;
     }
   }
 
@@ -678,10 +685,9 @@ export class OpenClawAgent implements Agent {
     // Lazily start gateway + WS on first session request
     if (!this.started) {
       try {
-        await this.ensureGateway();
-        this.lastError = null;
+        await this.ensureStartedOnce();
       } catch (err: any) {
-        this.lastError = err.message || String(err);
+        this.lastError = err?.message || String(err);
         throw err;
       }
     }
@@ -697,14 +703,34 @@ export class OpenClawAgent implements Agent {
 
   /** Proactively initialize the gateway (called by manager on startup). */
   async warmUp(): Promise<void> {
-    if (this.started) return;
+    // Best-effort; never throws — failure surfaces via status().
     try {
-      await this.ensureGateway();
-      this.lastError = null;
+      await this.ensureStartedOnce();
     } catch (err: any) {
-      this.lastError = err.message || String(err);
-      // Don't throw — warm-up is best-effort; surfaces via status()
+      this.lastError = err?.message || String(err);
+      log('warn', `warmUp failed: ${this.lastError}`);
     }
+  }
+
+  /** Single-flight wrapper around ensureGateway. Dedupes concurrent callers
+   *  so Rust's /openclaw/start POST and the sidecar's own self-warmup don't
+   *  both call ensureGateway() in parallel and end up spawning two gateways
+   *  fighting over port 18789 — that produces the token-mismatch reconnect
+   *  loop we kept seeing in startup logs. */
+  private async ensureStartedOnce(): Promise<void> {
+    if (this.started) return;
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (async () => {
+      try {
+        await this.ensureGateway();
+        this.lastError = null;
+      } finally {
+        // Clear regardless of outcome — a failed attempt should not block
+        // a subsequent retry from a fresh user click.
+        this.startPromise = null;
+      }
+    })();
+    return this.startPromise;
   }
 
   async stop(): Promise<void> {
